@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Housekeeping Daily · Operations Console</title>
+  <meta name="theme-color" content="#081218" />
+  <meta name="description" content="Edit the existing Housekeeping Daily XLSM without creating a new workbook." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <input id="fileInput" type="file" accept=".xlsm,application/vnd.ms-excel.sheet.macroEnabled.12" />
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="mark">HK</div>
+        <div>
+          <h1>Housekeeping Daily</h1>
+          <p>Operations console</p>
+        </div>
+      </div>
+      <nav class="side-nav" id="sideNav">
+        <button data-tab="daily" class="active">Overview</button>
+        <button data-tab="villas">Villa board</button>
+        <button data-tab="lists">Moves & traffic</button>
+        <button data-tab="staff">Team & leave</button>
+        <button data-tab="match">MATCH sheet</button>
+        <button data-tab="supervisor">Supervisor allocation</button>
+        <button data-tab="raw">Cell inspector</button>
+      </nav>
+      <div class="side-meta">
+        <div id="sideFile" class="fn">No workbook loaded</div>
+        <div id="sideSub" class="sub">Open the live XLSM to begin</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button id="openBtn" class="ghost" type="button">Open workbook</button>
+        <span id="fileName" class="file-chip"></span>
+        <span id="dirtyCount" class="badge hidden">0 changes</span>
+        <span class="spacer"></span>
+        <button id="resetBtn" type="button" disabled>Discard edits</button>
+        <button id="saveBtn" class="primary" type="button" disabled>Save XLSM</button>
+      </header>
+
+      <nav class="mobile-nav" id="mobileNav">
+        <button data-tab="daily" class="active">Overview</button>
+        <button data-tab="villas">Villas</button>
+        <button data-tab="lists">Traffic</button>
+        <button data-tab="staff">Team</button>
+        <button data-tab="match">MATCH</button>
+        <button data-tab="supervisor">Supervisors</button>
+        <button data-tab="raw">Inspect</button>
+      </nav>
+
+      <section id="empty" class="hero">
+        <div class="hero-card">
+          <h2>Update the live Housekeeping Daily file</h2>
+          <p class="hint">
+            This console writes back into the same <b>.xlsm</b>. Colour codes, logos, merged cells and VBA stay in the original workbook. A new Excel file is never created.
+          </p>
+          <div id="dropZone" class="drop">
+            Drop the current month XLSM here, or click to browse
+          </div>
+          <div class="steps">
+            <div><b>01</b><span>Open today’s HK Daily XLSM from the shared folder.</span></div>
+            <div><b>02</b><span>Update villa status, arrivals, duty names and leave.</span></div>
+            <div><b>03</b><span>Save XLSM — same file name — then replace the shared copy.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <main id="app" class="hidden">
+        <div id="view" class="wrap"></div>
+      </main>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="saveModal" class="overlay">
+    <div class="modal">
+      <h3>Save the same workbook</h3>
+      <p class="hint" id="saveCopy">Download keeps macros and cell colours. Replace the file on the shared drive after download.</p>
+      <div class="modal-actions">
+        <button id="saveCancel" type="button">Cancel</button>
+        <button id="saveConfirm" class="primary" type="button">Download XLSM</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
