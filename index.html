@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#c45911"/>
+<meta name="description" content="Edit the live Housekeeping Daily XLSM on the phone. Same file, colours and macros kept."/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="HK Daily"/>
+<meta name="application-name" content="HK Daily"/>
+<title>HK Daily</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="data:image/png;base64,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"/>
+<link rel="apple-touch-icon" href="icons/icon-192.png"/>
+<link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png"/>
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png"/>
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg"/>
+<meta name="app-version" content="1.0.0"/>
+<link rel="stylesheet" href="styles.css?v=1.0.0"/>
+<script>
+  window.APP_BUILD = "1.0.0";
+  (function () {
+    if (sessionStorage.getItem("hk-daily-forced") === "1.0.0") return;
+    fetch("version.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (info) {
+      var need = String(info.minVersion || info.version || "");
+      if (need && need !== window.APP_BUILD) {
+        sessionStorage.setItem("hk-daily-forced", "1.0.0");
+        var done = Promise.resolve();
+        if (navigator.serviceWorker) {
+          done = navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          });
+        }
+        done.then(function () {
+          if (!window.caches) return;
+          return caches.keys().then(function (keys) {
+            return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+          });
+        }).then(function () {
+          location.replace(location.pathname + "?v=" + Date.now());
+        });
+      }
+    }).catch(function () {});
+  })();
+</script>
+</head>
+<body>
+<div class="header">
+<div class="toolbar">
+  <div class="tb-top">
+    <b>HK Daily</b>
+    <span class="file" id="fileName">Import orange HK Daily first</span>
+    <button class="tb-new" id="btnClear" hidden>New</button>
+  </div>
+  <div class="tb-actions">
+    <label class="filebtn">XLSM<input id="fileIn" type="file" accept=".xlsm,.xlsx" hidden></label>
+    <button class="dim" id="btnSave" disabled>Save</button>
+    <button class="dim" id="btnOut" disabled>Download</button>
+    <button class="accent" id="btnRoll" disabled>To today</button>
+    <button class="dim" id="btnUndo" disabled>Undo</button>
+    <button class="dim" id="btnRedo" disabled>Redo</button>
+    <button class="accent" id="btnText" disabled>From text</button>
+    <button class="tb-install" id="btnInstall" hidden>Install app</button>
+  </div>
+</div>
+<div class="views" id="viewBar" hidden></div>
+</div>
+<div id="gate" class="gate">
+  <h2>Import Housekeeping Daily</h2>
+  <p>Open the orange <b>.xlsm</b> once. It is saved on this phone like the minibar consumption report, so next time the same file and your edits open automatically.</p>
+  <label class="big">Choose HK Daily .xlsm<input id="fileIn2" type="file" accept=".xlsm,.xlsx" hidden></label>
+  <button class="big" id="btnOpenSaved" style="background:#1f4e79;margin-top:8px;display:none">Open last saved file</button>
+  <p class="hint" style="margin-top:14px">Add to Home Screen after the first open. Works offline for the last saved file.</p>
+</div>
+<div class="page" id="page" hidden></div>
+<div class="overlay" id="overlay"></div>
+<div class="picker" id="picker"></div>
+<div class="modal" id="textModal">
+  <h3>Import rooms from text</h3>
+  <div class="body">
+    <p class="hint">Use this after Yesterday → Today. Paste today’s villa lists only. Same villa in Arrival and Departure = B2B. Occupied and Vacant are optional.</p>
+    <div class="field"><label>Arrival</label><textarea id="txArr" placeholder="211 304 436&#10;or one number per line"></textarea></div>
+    <div class="field"><label>Departure</label><textarea id="txDep" placeholder="105 204 401"></textarea></div>
+    <div class="field"><label>Room move</label><textarea id="txMove" placeholder="214-416&#10;121-418"></textarea></div>
+    <div class="field"><label>Occupied (optional)</label><textarea id="txOcc" placeholder="leave empty if not needed"></textarea></div>
+    <div class="field"><label>Vacant (optional)</label><textarea id="txVac" placeholder="leave empty if not needed"></textarea></div>
+  </div>
+  <div class="actions">
+    <button id="txCancel" style="background:#eee">Cancel</button>
+    <button id="txApply" style="background:#c45911;color:#fff">Import &amp; update statuses</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="app.js?v=1.0.0"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js?v=1.0.0", { updateViaCache: "none" }).catch(function () {});
+  }
+</script>
+</body>
+</html>
