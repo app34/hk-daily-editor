@@ -2,14 +2,23 @@ const STATUSES=[['OCC','OCCUPIED'],['ARR','ARRIVAL'],['DEP','DEPATURE'],['B2B','
 const CATS=[['BHV','Beach Villa'],['DVP','Deluxe Pool'],['BFS','Beach Family'],['WAV','Water Villa'],['WVP','Water Pool'],['HWS','Horizon Water']];
 const WEATHER=[['💧','Water / humid'],['☀️','Sunny'],['🌤️','Mostly sunny'],['⛅','Partly cloudy'],['☁️','Cloudy'],['🌦️','Showers'],['🌧️','Rain'],['⛈️','Thunderstorm'],['☔','Umbrella'],['🌫️','Fog'],['💨','Windy'],['🌊','Rough sea'],['🌙','Night'],['❄️','Cool']];
 const COLORS=['#5b9bd5','#c45911','#70ad47','#ed7d31','#9b6bdf','#2e75b6','#548235','#203864','#00b0f0'];
-const G1=[1,5,9,13,17,21,25,29];
-const G2=[1,5,9,13,17,21,25,29,33];
+const ALLOC_COLS=[1,5,9,13,17,21,25,29,33,37];
+const G1=ALLOC_COLS.slice();
+const G2=ALLOC_COLS.slice();
 const SHEET='JULY- 2026';
 let originalBuf=null,fileName='',model=null,pick=null,savedAt='';
 let viewMode=localStorage.getItem('hk-daily-view')||'full';
 let masterQ='';
 let selectedSrc='';
+let selectedSec='';
 let undoStack=[], redoStack=[];
+const STATUS_RGB={
+  ARR:'FFE181',DEP:'F8A968',VAC:'F9B9F4',B2B:'F56B96',
+  OCC:'A9D098','VM-ARR':'F3FDC3',SV:'B6FCC3',DC:'FCFEE8',
+  DU:'F4B183',STB:'D4F5FC',OS:'6DD9FF',OOO:'BFBFBF'
+};
+function inHouse(st){return ['OCC','ARR','B2B','DU','VM-ARR'].includes(st);}
+function isVacantLike(st){return !st || st==='VAC';}
 const VIEWS=[
   ['full','Full daily sheet'],
   ['cards','Attendant cards'],
@@ -155,6 +164,7 @@ function parseWorkbook(wb){
     water:parseBlocks(ws,48,r2,G2),
     moves, arrivals:pack(range(19,29),range(9,15)), departures:pack(range(19,29),range(17,23)),
     honeymoon:pack(range(19,29),[25]), birthday:pack(range(19,29),[29]), anniversary:pack(range(19,29),[33]), upon:pack(range(19,29),[37]),
+    vip:pack(range(10,17),range(7,11)),
     leave, laundry, supervisors, minibar, office, publicArea, tasks
   };
 }
@@ -170,10 +180,13 @@ function padGroup(list, group){
 }
 function ensureModel(m){
   if(!m) return m;
-  ['moves','arrivals','departures','honeymoon','birthday','anniversary','upon','leave','laundry','supervisors','minibar','office','publicArea','tasks','beach','water'].forEach(k=>{ if(!m[k]) m[k]=[]; });
+  ['moves','arrivals','departures','honeymoon','birthday','anniversary','upon','vip','leave','laundry','supervisors','minibar','office','publicArea','tasks','beach','water'].forEach(k=>{ if(!m[k]) m[k]=[]; });
   if(!m.duty) m.duty={};
   padGroup(m.beach,'beach');
   padGroup(m.water,'water');
+  padEmptySections(m,'beach');
+  padEmptySections(m,'water');
+  padTrafficLists(m);
   if(!m.forecast) m.forecast={weather:'☀️',occupancyPct:'',arrival:'',departure:'',villaMove:'',occupied:'',vacant:'',auto:true};
   if(m.forecast.auto!==false) m.forecast.auto=true;
   return m;
@@ -212,11 +225,18 @@ function syncForecast(){
   model.forecast.vacant=a.vacant;
 }
 function allocSnap(){
-  return JSON.parse(JSON.stringify({beach:model.beach,water:model.water,forecast:model.forecast,moves:model.moves}));
+  return JSON.parse(JSON.stringify({beach:model.beach,water:model.water,forecast:model.forecast,moves:model.moves,arrivals:model.arrivals,departures:model.departures,honeymoon:model.honeymoon,birthday:model.birthday,anniversary:model.anniversary,upon:model.upon,vip:model.vip}));
 }
 function applySnap(s){
   if(!s) return;
   model.beach=s.beach; model.water=s.water; model.forecast=s.forecast; model.moves=s.moves;
+  if(s.arrivals) model.arrivals=s.arrivals;
+  if(s.departures) model.departures=s.departures;
+  if(s.honeymoon) model.honeymoon=s.honeymoon;
+  if(s.birthday) model.birthday=s.birthday;
+  if(s.anniversary) model.anniversary=s.anniversary;
+  if(s.upon) model.upon=s.upon;
+  if(s.vip) model.vip=s.vip;
 }
 function pushUndo(){
   undoStack.push(allocSnap());
@@ -236,15 +256,99 @@ function doRedo(){
   render(); persist(false); toast('Redo — statuses applied again');
 }
 function parseRooms(text){
-  return [...new Set(String(text||'').split(/[^0-9]+/).filter(Boolean))];
+  const out=[];
+  String(text||'').split(/[^0-9]+/).filter(Boolean).forEach(chunk=>{
+    if(chunk.length<=3){ out.push(chunk); return; }
+    for(let i=0;i<chunk.length;i+=3){
+      const part=chunk.slice(i,i+3);
+      if(part.length===3) out.push(part);
+    }
+  });
+  return [...new Set(out)];
 }
+function formatRoomText(text){ return parseRooms(text).join(' '); }
 function parseMoveLines(text){
   const out=[];
   String(text||'').split(/\n+/).forEach(line=>{
-    const nums=String(line).split(/[^0-9]+/).filter(Boolean);
-    if(nums.length>=2) out.push({from:nums[0],to:nums[1]});
+    const nums=parseRooms(line);
+    for(let i=0;i+1<nums.length;i+=2) out.push({from:nums[i],to:nums[i+1]});
   });
   return out;
+}
+function formatMoveText(text){
+  return parseMoveLines(text).map(m=>m.from+'-'+m.to).join('\n');
+}
+const TRAFFIC={
+  arrivals:{rows:[19,29],cols:[9,15]},
+  departures:{rows:[19,29],cols:[17,23]},
+  honeymoon:{rows:[19,29],cols:[25,27]},
+  birthday:{rows:[19,29],cols:[29,31]},
+  anniversary:{rows:[19,29],cols:[33,35]},
+  upon:{rows:[19,29],cols:[37,39]},
+  vip:{rows:[10,17],cols:[7,11],fill:'col'}
+};
+function padChipSlots(list, rows, cols){
+  const slots=[];
+  for(let r=rows[0];r<=rows[1];r++){
+    for(let c=cols[0];c<=cols[1];c++) slots.push({v:'',cell:addr(r,c)});
+  }
+  (list||[]).forEach(item=>{
+    if(!item) return;
+    const hit=slots.find(s=>s.cell===item.cell);
+    if(hit) hit.v=item.v||'';
+    else {
+      const empty=slots.find(s=>!String(s.v||'').trim());
+      if(empty) empty.v=item.v||'';
+    }
+  });
+  return slots;
+}
+function padMoveSlots(list){
+  const slots=[];
+  [[1,2],[3,4],[6,7]].forEach(([a,b])=>{
+    for(let r=20;r<=29;r++) slots.push({from:'',to:'',fromCell:addr(r,a),toCell:addr(r,b)});
+  });
+  (list||[]).forEach(item=>{
+    const hit=item.fromCell?slots.find(s=>s.fromCell===item.fromCell):null;
+    if(hit){ hit.from=item.from||''; hit.to=item.to||''; }
+    else {
+      const empty=slots.find(s=>!s.from && !s.to);
+      if(empty){ empty.from=item.from||''; empty.to=item.to||''; }
+    }
+  });
+  return slots;
+}
+function padTrafficLists(m){
+  if(!m) return m;
+  Object.keys(TRAFFIC).forEach(k=>{
+    const spec=TRAFFIC[k];
+    m[k]=padChipSlots(m[k], spec.rows, spec.cols);
+  });
+  m.moves=padMoveSlots(m.moves);
+  return m;
+}
+function fillChipList(key, nums){
+  const list=model[key]||[];
+  list.forEach(x=>x.v='');
+  const spec=TRAFFIC[key];
+  if(spec && spec.fill==='col'){
+    const cols=spec.cols[1]-spec.cols[0]+1;
+    const rows=spec.rows[1]-spec.rows[0]+1;
+    nums.forEach((n,i)=>{
+      const c=Math.floor(i/rows);
+      const r=i%rows;
+      const idx=r*cols+c;
+      if(list[idx]) list[idx].v=n;
+    });
+    return;
+  }
+  nums.forEach((n,i)=>{ if(list[i]) list[i].v=n; });
+}
+function fillMoveList(pairs){
+  (model.moves||[]).forEach(x=>{ x.from=''; x.to=''; });
+  pairs.forEach((m,i)=>{
+    if(model.moves[i]){ model.moves[i].from=m.from; model.moves[i].to=m.to; }
+  });
 }
 function findVilla(num){
   const hits=[];
@@ -268,37 +372,82 @@ function rollYesterdayToToday(){
   persist('Rolled yesterday to today');
   toast(n+' rooms changed to today. Undo if it is wrong');
 }
+function normalizeTextFields(){
+  const roomIds=['txArr','txDep','txOcc','txVac','txHoney','txBirth','txAnn','txUpon','txVip'];
+  roomIds.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el && el.value.trim()) el.value=formatRoomText(el.value);
+  });
+  const mv=document.getElementById('txMove');
+  if(mv && mv.value.trim()) mv.value=formatMoveText(mv.value);
+}
 function applyTextImport(){
+  normalizeTextFields();
   const A=new Set(parseRooms(document.getElementById('txArr').value));
   const D=new Set(parseRooms(document.getElementById('txDep').value));
   const O=new Set(parseRooms(document.getElementById('txOcc').value));
   const V=new Set(parseRooms(document.getElementById('txVac').value));
   const mv=parseMoveLines(document.getElementById('txMove').value);
-  if(!A.size && !D.size && !O.size && !V.size && !mv.length){ toast('Paste at least one villa number'); return; }
+  const Hn=parseRooms(document.getElementById('txHoney')?document.getElementById('txHoney').value:'');
+  const Bd=parseRooms(document.getElementById('txBirth')?document.getElementById('txBirth').value:'');
+  const An=parseRooms(document.getElementById('txAnn')?document.getElementById('txAnn').value:'');
+  const Up=parseRooms(document.getElementById('txUpon')?document.getElementById('txUpon').value:'');
+  const Vp=parseRooms(document.getElementById('txVip')?document.getElementById('txVip').value:'');
+  if(!A.size && !D.size && !O.size && !V.size && !mv.length && !Hn.length && !Bd.length && !An.length && !Up.length && !Vp.length){ toast('Paste at least one villa number'); return; }
   pushUndo();
-  let missing=[];
-  const listed=[...A,...D,...O,...V,...mv.map(x=>x.from),...mv.map(x=>x.to)];
+  const fromSet=new Set(mv.map(x=>String(x.from)));
+  const toSet=new Set(mv.map(x=>String(x.to)));
+  let missing=[], flagged=0, changed=0;
+  const listed=[...A,...D,...O,...V,...fromSet,...toSet];
   listed.forEach(num=>{ if(!findVilla(num).length) missing.push(num); });
   ['beach','water'].forEach(g=>model[g].forEach(p=>p.rows.forEach(r=>{
     const v=String(r.villa||'').trim();
-    if(!v) return;
-    if(A.has(v) && D.has(v)) r.status='B2B';
-    else if(A.has(v)) r.status='ARR';
-    else if(D.has(v)) r.status='DEP';
-    if(O.has(v)) r.status='OCC';
-    if(V.has(v)) r.status='VAC';
+    if(!v){ r.flag=''; return; }
+    r.flag='';
+    const incoming=A.has(v) || toSet.has(v);
+    const leaving=D.has(v) || fromSet.has(v);
+    const cur=r.status;
+    if(inHouse(cur) && A.has(v) && !leaving){
+      r.flag='occ-arr'; flagged++; return;
+    }
+    if(isVacantLike(cur) && D.has(v) && !incoming){
+      r.flag='vac-dep'; flagged++; return;
+    }
+    if(isVacantLike(cur) && fromSet.has(v) && !incoming){
+      r.flag='vac-move'; flagged++; return;
+    }
+    if(inHouse(cur) && toSet.has(v) && !leaving){
+      r.flag='occ-movein'; flagged++; return;
+    }
+    let next=cur;
+    if(leaving && incoming) next='B2B';
+    else if(A.has(v)) next='ARR';
+    else if(toSet.has(v)) next='VM-ARR';
+    else if(D.has(v) || fromSet.has(v)) next='DEP';
+    else if(O.has(v)) next='OCC';
+    else if(V.has(v)) next='VAC';
+    if(next!==cur){ r.status=next; changed++; }
   })));
-  mv.forEach(m=>{
-    findVilla(m.from).forEach(r=>{ if(!A.has(String(r.villa))) r.status='DEP'; });
-    findVilla(m.to).forEach(r=>{ r.status = (A.has(String(r.villa))&&D.has(String(r.villa))) ? 'B2B' : 'VM-ARR'; });
-    if(!model.moves.some(x=>String(x.from)===String(m.from)&&String(x.to)===String(m.to)))
-      model.moves.push({from:m.from,to:m.to,fromCell:'',toCell:''});
-  });
+  if(A.size) fillChipList('arrivals',[...A]);
+  if(D.size) fillChipList('departures',[...D]);
+  if(mv.length) fillMoveList(mv);
+  if(Hn.length) fillChipList('honeymoon',Hn);
+  if(Bd.length) fillChipList('birthday',Bd);
+  if(An.length) fillChipList('anniversary',An);
+  if(Up.length) fillChipList('upon',Up);
+  if(Vp.length) fillChipList('vip',Vp);
+  if(model.forecast && model.forecast.auto!==false){
+    model.forecast.villaMove=mv.length||model.forecast.villaMove;
+  }
   syncForecast();
   closeTextModal();
   render();
   persist('Statuses updated from text');
-  toast((missing.length? (missing.length+' numbers not on board. ') : '')+'Updated. Use Undo if needed');
+  const bits=[];
+  if(changed) bits.push(changed+' rooms updated');
+  if(flagged) bits.push(flagged+' need a manual check (red highlight)');
+  if(missing.length) bits.push(missing.length+' numbers not on board');
+  toast((bits.join('. ')||'No status change')+'. Undo if needed');
 }
 function openTextModal(){
   document.getElementById('overlay').classList.add('show');
@@ -340,7 +489,7 @@ function attCard(group, gi, p, pi){
       ${rooms.map((r,ri)=>{
         const id=group+'.'+pi+'.'+ri;
         const empty=!String(r.villa||'').trim();
-        return `<tr class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''}" data-slot="${id}">
+        return `<tr class="${slotClass(group,pi,ri,r)}" data-slot="${id}" title="${esc(flagTitle(r))}">
         <td><input data-path="${group}.${pi}.rows.${ri}.villa" value="${esc(r.villa)}" placeholder="${empty?'empty slot':''}"></td>
         <td>${dd(group+'.'+pi+'.rows.'+ri+'.cat', r.cat,'cat')}</td>
         <td>${dd(group+'.'+pi+'.rows.'+ri+'.status', r.status,'status')}</td>
@@ -360,27 +509,71 @@ function viewBar(){
 }
 function moveHint(){
   const sel=selectedSrc?(()=>{const [g,i,r]=selectedSrc.split('.'); const row=model[g][+i].rows[+r]; return (row&&row.villa||'')+' · '+(row&&row.cat||'')+' · '+(row&&row.status||'');})():'';
-  return `<div class="card" style="margin:0 0 10px;${selectedSrc?'background:#9a3412;color:#fff;border-color:#9a3412':''}">
-    <b>${selectedSrc?('SELECTED '+sel):'No room selected'}</b>
-    <div class="hint" style="margin:4px 0 0;${selectedSrc?'color:#ffedd5':''}">Double-tap a room to select. Single tap edits the number. Then tap an empty slot to place V# / CAT / STAT.</div>
+  const secLab=selectedSec?(()=>{const [g,i]=selectedSec.split('.'); const p=model[g][+i]; return (p&&p.name)||'Empty section';})():'';
+  return `<div class="card" style="margin:0 0 10px;${selectedSrc||selectedSec?'background:#9a3412;color:#fff;border-color:#9a3412':''}">
+    <b>${selectedSec?('SELECTED SECTION '+secLab):selectedSrc?('SELECTED '+sel):'No room selected'}</b>
+    <div class="hint" style="margin:4px 0 0;${selectedSrc||selectedSec?'color:#ffedd5':''}">${selectedSec?'Section selected — tap an empty section name to place it.':'Double-tap a room or a section name. Empty sections stay visible so a full column can move.'}</div>
   </div>`;
 }
 function pathOf(group,pi,ri,field){return group+'.'+pi+'.rows.'+ri+'.'+field;}
+function slotClass(group,pi,ri,row){
+  const id=group+'.'+pi+'.'+ri;
+  const empty=!String(row&&row.villa||'').trim();
+  const st=esc(row&&row.status||'');
+  return `slot ${empty?'empty':''} ${selectedSrc===id?'on':''} ${row&&row.flag?'flag':''} st-${st}`;
+}
+function flagTitle(row){
+  const m={
+    'occ-arr':'Occupied + arrival, no departure — not auto-updated',
+    'vac-dep':'Vacant + departure — not auto-updated',
+    'vac-move':'Vacant + room move out — not auto-updated',
+    'occ-movein':'Occupied + room move in, no departure — not auto-updated'
+  };
+  return row&&row.flag? m[row.flag]||'Check this room':'';
+}
+function isSectionEmpty(p){
+  return !String(p.name||'').trim() && !filled(p).length;
+}
+function padEmptySections(m, group){
+  if(!m[group]) m[group]=[];
+  const have=new Set(m[group].map(p=>p.col));
+  ALLOC_COLS.forEach(c=>{
+    if(!have.has(c)) addSection(group, {silent:true, empty:true, modelRef:m, col:c});
+  });
+  m[group].sort((a,b)=>(a.col||0)-(b.col||0));
+}
+function flagBanner(){
+  const items=[];
+  ['beach','water'].forEach(g=>model[g].forEach((p,pi)=>p.rows.forEach((r,ri)=>{
+    if(r.flag && String(r.villa||'').trim()) items.push({g,pi,ri,p,r});
+  })));
+  if(!items.length) return '';
+  return `<div class="flagbar"><b>${items.length} rooms need a manual check</b>
+    <div class="hint" style="margin:4px 0 0;color:#7f1d1d">Import did not change these. Occupied + arrival with no departure, vacant + departure, or a room move that does not fit. Tap the red V# / CAT / STAT and set the status yourself.</div>
+    <div class="flaglist">${items.map(x=>`<button type="button" class="flagchip" data-slot="${x.g}.${x.pi}.${x.ri}">${esc(x.r.villa)} · ${esc(x.r.status||'-')} · ${esc(flagTitle(x.r))}</button>`).join('')}</div>
+  </div>`;
+}
+
 function sheetBlock(title, group, list){
   const max=Math.max(...list.map(p=>p.rows.length),1);
   return `<div class="secbar"><h3 style="color:#1f4e79;margin:0">${title}</h3>
       <button class="add" style="width:auto;padding:8px 10px" data-addsec="${group}">+ New section</button></div>
     <div class="sheetwrap"><table class="sheetgrid">
-      <tr>${list.map((p,i)=>`<th class="nm dropzone" data-drop="${group}.${i}" colspan="3" style="background:${p.color}"><input data-path="${group}.${i}.name" value="${esc(p.name)}" style="color:#222;font-weight:800"></th>`).join('')}</tr>
+      <tr>${list.map((p,i)=>{
+        const sid=group+'.'+i;
+        const emptySec=isSectionEmpty(p);
+        return `<th class="nm dropzone ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color}"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" placeholder="${emptySec?'Empty section':''}" style="color:${emptySec?'#6b5a4a':'#222'};font-weight:800"></th>`;
+      }).join('')}</tr>
       <tr>${list.map(()=>'<th>V#</th><th>CAT</th><th>STAT</th>').join('')}</tr>
       ${Array.from({length:max},(_,r)=>'<tr>'+list.map((p,i)=>{
         const row=p.rows[r];
         if(!row) return '<td></td><td></td><td></td>';
         const id=group+'.'+i+'.'+r;
         const empty=!String(row.villa||'').trim();
-        return `<td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''}" data-slot="${id}"><input data-path="${pathOf(group,i,r,'villa')}" value="${esc(row.villa)}" placeholder="${empty?'+':''}"></td>
-                <td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''}" data-slot="${id}">${dd(pathOf(group,i,r,'cat'),row.cat,'cat')}</td>
-                <td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''}" data-slot="${id}">${dd(pathOf(group,i,r,'status'),row.status,'status')}</td>`;
+        const cls=slotClass(group,i,r,row);
+        return `<td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}"><input data-path="${pathOf(group,i,r,'villa')}" value="${esc(row.villa)}" placeholder="${empty?'+':''}"></td>
+                <td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}">${dd(pathOf(group,i,r,'cat'),row.cat,'cat')}</td>
+                <td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}">${dd(pathOf(group,i,r,'status'),row.status,'status')}</td>`;
       }).join('')+'</tr>').join('')}
     </table></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0">${list.map((p,i)=>`<button class="add" style="width:auto;padding:8px 10px" data-add="${group}.${i}">+ Room ${esc(p.name||'section')}</button>`).join('')}</div>`;
@@ -401,6 +594,76 @@ function masterRows(){
   });
   return rows;
 }
+function trafficVisible(list, hasVal){
+  const filled=[], empty=[];
+  (list||[]).forEach((x,i)=> (hasVal(x)?filled:empty).push(i));
+  return [...filled, ...empty.slice(0,3)];
+}
+function trafficCols(key){
+  const spec=TRAFFIC[key];
+  return spec? spec.cols[1]-spec.cols[0]+1 : 1;
+}
+function trafficGrid(key, cls){
+  const list=model[key]||[];
+  const cols=trafficCols(key);
+  const rows=Math.max(1, Math.ceil(list.length/cols));
+  let body='';
+  for(let r=0;r<rows;r++){
+    body+='<tr>';
+    for(let c=0;c<cols;c++){
+      const i=r*cols+c;
+      const x=list[i];
+      body += x? `<td><input data-path="${key}.${i}.v" value="${esc(x.v)}" inputmode="numeric" enterkeyhint="next"></td>` : '<td></td>';
+    }
+    body+='</tr>';
+  }
+  const n=(list||[]).filter(x=>String(x.v||'').trim()).length;
+  return `<td class="tblock ${cls||''}">
+    <table class="tgrid">${body}</table>
+  </td>`;
+}
+function moveGrid(){
+  const moves=model.moves||[];
+  const pairs=3, rows=10;
+  let body='<tr>'+Array.from({length:pairs},()=>'<th>FROM</th><th>TO</th>').join('')+'</tr>';
+  for(let r=0;r<rows;r++){
+    body+='<tr>';
+    for(let p=0;p<pairs;p++){
+      const i=p*rows+r;
+      const x=moves[i]||{from:'',to:''};
+      body += `<td><input data-path="moves.${i}.from" value="${esc(x.from)}" inputmode="numeric" enterkeyhint="next"></td><td><input data-path="moves.${i}.to" value="${esc(x.to)}" inputmode="numeric" enterkeyhint="next"></td>`;
+    }
+    body+='</tr>';
+  }
+  return `<td class="tblock">
+    <table class="tgrid tmoves">${body}</table>
+  </td>`;
+}
+function trafficBoard(){
+  const n=function(key){ return (model[key]||[]).filter(x=>String(x.v||'').trim()).length; };
+  const mn=(model.moves||[]).filter(x=>String(x.from||'').trim()||String(x.to||'').trim()).length;
+  return `<table class="traffic">
+      <tr>
+        <td class="sec" colspan="1">VILLA MOVE <small>${mn}</small></td>
+        <td class="sec">ARRIVAL <small>${n('arrivals')}</small></td>
+        <td class="sec2">DEPATURE <small>${n('departures')}</small></td>
+        <td class="sec">HONEYMOON <small>${n('honeymoon')}</small></td>
+        <td class="sec">BIRTHDAY <small>${n('birthday')}</small></td>
+        <td class="sec">ANNIVERSARY <small>${n('anniversary')}</small></td>
+        <td class="sec">UPON ARRIVAL <small>${n('upon')}</small></td>
+      </tr>
+      <tr>
+        ${moveGrid()}
+        ${trafficGrid('arrivals','kpi-arr')}
+        ${trafficGrid('departures','kpi-dep')}
+        ${trafficGrid('honeymoon','')}
+        ${trafficGrid('birthday','')}
+        ${trafficGrid('anniversary','')}
+        ${trafficGrid('upon','')}
+      </tr>
+    </table>
+    <div class="tiny" style="margin:4px 0 6px">Same layout as the orange sheet: moves are 3 FROM/TO blocks, arrival and departure are 7×11, honeymoon / birthday / anniversary / upon arrival are 3×11. Type here or use From text.</div>`;
+}
 function chips(list, path){
   if(!list||!list.length) return '<span class="tiny">—</span>';
   return list.map((x,i)=>`<span style="display:inline-block;min-width:42px">${path?`<input data-path="${path}.${i}.v" value="${esc(x.v)}">`:esc(x.v)}</span>`).join(' ');
@@ -410,13 +673,18 @@ function fullSheetView(){
   const grid=(group,list)=>{
     const max=Math.max(...list.map(p=>p.rows.length),1);
     return `<table>
-      <tr>${list.map((p,i)=>`<td class="dropzone" data-drop="${group}.${i}" colspan="3" style="background:${p.color};padding:5px 3px"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}"></td>`).join('')}</tr>
+      <tr>${list.map((p,i)=>{
+        const sid=group+'.'+i;
+        const emptySec=isSectionEmpty(p);
+        return `<td class="dropzone sechead ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color};padding:5px 3px"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" placeholder="${emptySec?'Empty section — drop here':''}"></td>`;
+      }).join('')}</tr>
       <tr>${list.map(()=>'<td class="sec">V#</td><td class="sec">CAT.</td><td class="sec">STAT.</td>').join('')}</tr>
-      ${Array.from({length:max},(_,r)=>'<tr>'+list.map((p,i)=>{
+      ${Array.from({length:max},(_,r)=>'<tr class="'+(selectedSec?(selectedSec.startsWith(group+'.')?'':''):'')+'">'+list.map((p,i)=>{
         const row=p.rows[r]; if(!row) return '<td></td><td></td><td></td>';
         const id=group+'.'+i+'.'+r;
         const empty=!String(row.villa||'').trim();
-        return `<td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''}" data-slot="${id}"><div class="vcell"><input data-path="${pathOf(group,i,r,'villa')}" value="${esc(row.villa)}" placeholder="${empty?'+':''}"></div></td><td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''} st-${esc(row.cat||'')}" data-slot="${id}">${dd(pathOf(group,i,r,'cat'),row.cat,'cat')}</td><td class="slot ${empty?'empty':''} ${selectedSrc===id?'on':''} st-${esc(row.status||'')}" data-slot="${id}">${dd(pathOf(group,i,r,'status'),row.status,'status')}</td>`;
+        const cls=slotClass(group,i,r,row)+(selectedSec===group+'.'+i?' sec-col':'');
+        return `<td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}"><div class="vcell"><input data-path="${pathOf(group,i,r,'villa')}" value="${esc(row.villa)}" placeholder="${empty?'+':''}" inputmode="numeric" enterkeyhint="next"></div></td><td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}">${dd(pathOf(group,i,r,'cat'),row.cat,'cat')}</td><td class="${cls}" data-slot="${id}" title="${esc(flagTitle(row))}">${dd(pathOf(group,i,r,'status'),row.status,'status')}</td>`;
       }).join('')+'</tr>').join('')}
     </table>`;
   };
@@ -439,7 +707,7 @@ function fullSheetView(){
       <tr><td class="core" colspan="6">CORE VALUE OF THE DAY</td><td class="core" colspan="21"><input data-path="core" value="${esc(model.core)}"></td></tr>
     </table>
     <table style="margin-top:4px">
-      <tr><td class="sec">FORECAST <button type="button" class="dd" data-dd="weather" data-path="forecast.weather" style="width:auto;background:#fff;font-size:18px;padding:2px 8px">${esc(model.forecast.weather||'💧')}</button></td><td class="sec">VIP / NOTES</td><td class="sec2">Next day arrival guest preferences</td></tr>
+      <tr><td class="sec">FORECAST <button type="button" class="dd" data-dd="weather" data-path="forecast.weather" style="width:auto;background:#fff;font-size:18px;padding:2px 8px">${esc(model.forecast.weather||'💧')}</button></td><td class="sec">VIP ARRIVAL <small>${(model.vip||[]).filter(x=>String(x.v||'').trim()).length}</small></td><td class="sec2">Next day arrival guest preferences</td></tr>
       <tr>
         <td>
           <table>
@@ -457,25 +725,15 @@ function fullSheetView(){
             <input id="autoCount" type="checkbox" ${model.forecast.auto!==false?'checked':''}> Auto ARR / DEP / OCC / VAC from allocation
           </label>
         </td>
-        <td class="tiny">VIP list stays on the orange sheet.</td>
+        ${trafficGrid('vip','vipbox')}
         <td class="tiny">Preferences stay in the original sheet cells when present.</td>
       </tr>
     </table>
-    <table style="margin-top:4px">
-      <tr><td class="sec">VILLA MOVE</td><td class="sec">ARRIVAL</td><td class="sec2">DEPATURE</td><td class="sec">HONEYMOON</td><td class="sec">BIRTHDAY</td><td class="sec">ANNIVERSARY</td></tr>
-      <tr>
-        <td>${(model.moves||[]).map((x,i)=>`<div>${`<input data-path="moves.${i}.from" value="${esc(x.from)}" style="width:46%">`} → ${`<input data-path="moves.${i}.to" value="${esc(x.to)}" style="width:46%">`}</div>`).join('')}<button class="add" data-addmove="1">+ move</button></td>
-        <td>${chips(model.arrivals,'arrivals')}</td>
-        <td>${chips(model.departures,'departures')}</td>
-        <td>${chips(model.honeymoon,'honeymoon')}</td>
-        <td>${chips(model.birthday,'birthday')}</td>
-        <td>${chips(model.anniversary,'anniversary')}</td>
-      </tr>
-    </table>
+    ${trafficBoard()}
     <div class="sec" style="margin-top:6px;padding:5px">VILLA ATTENDANT ALLOCATION</div>
     <div class="tools">
       <b>Edit</b>
-      <span>Double-tap a room to select it. Then tap an empty slot to place V# / CAT / STAT. Single tap only edits the number.</span>
+      <span>Double-tap a room to move it. Double-tap a section name to move the whole column onto an empty section.</span>
       <span id="selLabel" style="${selectedSrc?'background:#9a3412;color:#fff;padding:4px 8px;border-radius:4px;font-weight:800':''}">${selectedSrc?('SELECTED '+(()=>{const [g,i,r]=selectedSrc.split('.'); const row=model[g][+i].rows[+r]; return (row&&row.villa||'')+' · '+(row&&row.cat||'')+' · '+(row&&row.status||'');})()):'No room selected'}</span>
       <select id="moveWho" style="border:0;border-radius:4px;padding:5px 6px;font-size:11px">
         <option value="">Move selected to…</option>
@@ -699,6 +957,7 @@ function render(){
       <div class="kpi"><b>${m.b2b}</b><span>B2B</span></div>
       <div class="kpi"><b>${m.vac}</b><span>VAC</span></div>
     </div>
+    ${flagBanner()}
     ${viewBody()}
     ${viewMode==='full'?'':extrasBlock()}
   `;
@@ -717,28 +976,60 @@ function addRoom(group, pi, data){
   p.rows.push(row);
   return row;
 }
-function addSection(group){
-  const used=model[group].map(p=>p.col);
-  let col=group==='beach'?33:37;
-  while(used.includes(col)) col+=4;
+function addSection(group, opt){
+  opt=opt||{};
+  const target=opt.modelRef||model;
+  if(!target[group]) target[group]=[];
+  const used=target[group].map(p=>p.col);
+  let col=opt.col;
+  if(col==null){
+    col=ALLOC_COLS.find(c=>!used.includes(c));
+    if(col==null){
+      if(!opt.silent) toast('The orange sheet has 10 section columns only');
+      return;
+    }
+  }
   const headerRow=group==='beach'?32:48;
   const start=group==='beach'?36:52;
   const count=group==='beach'?12:13;
   const rows=[];
   for(let i=0;i<count;i++){
     const r=start+i;
-    rows.push({villa:'',cat:'',status:'',extra:false,cells:[addr(r,col),addr(r,col+1),addr(r,col+2)]});
+    rows.push({villa:'',cat:'',status:'',flag:'',extra:false,cells:[addr(r,col),addr(r,col+1),addr(r,col+2)]});
   }
-  model[group].push({
-    name:'NEW SECTION',
+  target[group].push({
+    name: opt.empty?'':(opt.name||'NEW SECTION'),
     nameCell:addr(headerRow,col),
     col, headerRow,
-    color:COLORS[model[group].length%COLORS.length],
+    color:COLORS[target[group].length%COLORS.length],
     extraStart:start+count,
-    rows, added:true
+    rows, added:true, landing:!!opt.empty
   });
+  if(!opt.silent){
+    render();
+    persist(opt.empty?'Empty section added':'New allocation section added');
+  }
+}
+function moveSection(src, dest){
+  if(!src||!dest||src===dest) return;
+  const [sg,si]=src.split('.');
+  const [dg,di]=dest.split('.');
+  const a=model[sg]&&model[sg][+si];
+  const b=model[dg]&&model[dg][+di];
+  if(!a||!b) return;
+  const n=Math.max(a.rows.length,b.rows.length);
+  while(a.rows.length<n) a.rows.push({villa:'',cat:'',status:'',flag:'',extra:true,cells:[]});
+  while(b.rows.length<n) b.rows.push({villa:'',cat:'',status:'',flag:'',extra:true,cells:[]});
+  const tmpName=a.name; a.name=b.name; b.name=tmpName;
+  for(let i=0;i<n;i++){
+    const ta={villa:a.rows[i].villa,cat:a.rows[i].cat,status:a.rows[i].status,flag:a.rows[i].flag};
+    a.rows[i].villa=b.rows[i].villa; a.rows[i].cat=b.rows[i].cat; a.rows[i].status=b.rows[i].status; a.rows[i].flag=b.rows[i].flag;
+    b.rows[i].villa=ta.villa; b.rows[i].cat=ta.cat; b.rows[i].status=ta.status; b.rows[i].flag=ta.flag;
+  }
+  selectedSec='';
+  syncForecast();
   render();
-  persist('New allocation section added');
+  persist((b.name||'Section')+' moved');
 }
 function takeRoom(g,pi,ri){
   const p=model[g][pi];
@@ -800,19 +1091,32 @@ function openPicker(kind,path,cur){
 }
 function closePicker(){document.getElementById('overlay').classList.remove('show');document.getElementById('picker').classList.remove('show');pick=null;}
 
-document.body.addEventListener('input',e=>{
-  if(e.target.id==='masterQ'){ masterQ=e.target.value; render(); const n=document.getElementById('masterQ'); if(n){n.focus(); n.setSelectionRange(n.value.length,n.value.length);} return; }
-  if(e.target.id==='autoCount'){
-    model.forecast.auto=!!e.target.checked;
+function applyField(el){
+  if(!el) return false;
+  if(el.id==='masterQ'){ masterQ=el.value; render(); const n=document.getElementById('masterQ'); if(n){n.focus(); try{n.setSelectionRange(n.value.length,n.value.length);}catch(err){} } return true; }
+  if(el.id==='autoCount'){
+    model.forecast.auto=!!el.checked;
     if(model.forecast.auto){ syncForecast(); render(); }
     persist(false);
-    return;
+    return true;
   }
-  const el=e.target.closest('[data-path]');
-  if(!el) return;
-  setPath(el.dataset.path, el.value);
-  if(/^forecast\.(arrival|departure|occupied|vacant)$/.test(el.dataset.path)) model.forecast.auto=false;
+  const pathEl=el.closest('[data-path]');
+  if(!pathEl) return false;
+  setPath(pathEl.dataset.path, pathEl.type==='checkbox'?pathEl.checked:pathEl.value);
+  if(/^forecast\.(arrival|departure|occupied|vacant)$/.test(pathEl.dataset.path)) model.forecast.auto=false;
+  if(/\.rows\.\d+\.(villa|status|cat)$/.test(pathEl.dataset.path)){
+    const parts=pathEl.dataset.path.split('.');
+    const row=model[parts[0]][+parts[1]].rows[+parts[3]];
+    if(row && row.flag && parts[4]!=='villa'){ row.flag=''; }
+  }
   scheduleSave();
+  return true;
+}
+document.body.addEventListener('input',e=>{
+  applyField(e.target);
+});
+document.body.addEventListener('change',e=>{
+  if(e.target && (e.target.tagName==='SELECT' || e.target.type==='checkbox' || e.target.type==='date')) applyField(e.target);
 });
 document.body.addEventListener('click',e=>{
   const vw=e.target.closest('[data-view]');
@@ -827,6 +1131,23 @@ document.body.addEventListener('click',e=>{
   if(e.target.closest('[data-redo]')){ doRedo(); return; }
   if(e.target.id==='txCancel'){ closeTextModal(); return; }
   if(e.target.id==='txApply'){ applyTextImport(); return; }
+  const secEl=e.target.closest('[data-sec]');
+  if(secEl && !e.target.closest('input,button,select')){
+    const sid=secEl.dataset.sec;
+    if(selectedSec && selectedSec!==sid){ pushUndo(); moveSection(selectedSec, sid); return; }
+    const now=Date.now();
+    if(window.__secTap && window.__secTap.id===sid && now-window.__secTap.t<450){
+      selectedSrc='';
+      selectedSec = selectedSec===sid?'':sid;
+      window.__ignoreDbl=true;
+      render();
+      toast(selectedSec?'Section selected — tap an empty section to place it':'Section cleared');
+      window.__secTap=null;
+      return;
+    }
+    window.__secTap={id:sid,t:now};
+    return;
+  }
   if(!e.target.closest('[data-dd],.opt,button,.filebtn')){
     const slot=e.target.closest('[data-slot]');
     if(slot){
@@ -877,10 +1198,24 @@ document.body.addEventListener('click',e=>{
   const add=e.target.closest('[data-add]');
   if(add){const [g,i]=add.dataset.add.split('.'); addRoom(g,+i); syncForecast(); render(); persist('Extra room added'); return;}
   const addsec=e.target.closest('[data-addsec]');
-  if(addsec){ addSection(addsec.dataset.addsec); return; }
+  if(addsec){ addSection(addsec.dataset.addsec, {empty:true}); return; }
   const mv=e.target.closest('[data-move]');
   if(mv){ openMovePicker(mv.dataset.move); return; }
-  if(e.target.closest('[data-addmove]')){model.moves.push({from:'',to:'',fromCell:'',toCell:''});render();persist(false);return;}
+  if(e.target.closest('[data-addmove]')){
+    const empty=(model.moves||[]).find(x=>!String(x.from||'').trim()&&!String(x.to||'').trim());
+    if(empty){ empty.from=' '; empty.from=empty.from.trim(); }
+    else toast('No empty villa-move cell left on the sheet');
+    render(); persist(false); return;
+  }
+  const addchip=e.target.closest('[data-addchip]');
+  if(addchip){
+    const key=addchip.dataset.addchip;
+    const empty=(model[key]||[]).find(x=>!String(x.v||'').trim());
+    if(empty) empty.v=' ';
+    else toast('No empty cell left on the orange sheet');
+    if(empty) empty.v='';
+    render(); persist(false); return;
+  }
   const del=e.target.closest('[data-del]');
   if(del){
     const [g,pi,ri]=del.dataset.del.split('.');
@@ -895,13 +1230,29 @@ document.body.addEventListener('click',e=>{
   if(opt&&pick){
     if(pick.kind==='move' && opt.dataset.dest){ const src=pick.src; closePicker(); moveRoom(src, opt.dataset.dest); return; }
     setPath(pick.path,opt.dataset.val);
-    if(String(pick.path).includes('.status')) syncForecast();
+    if(String(pick.path).includes('.status')){
+      const parts=pick.path.split('.');
+      if(parts[2]==='rows'){
+        const row=model[parts[0]][+parts[1]].rows[+parts[3]];
+        if(row) row.flag='';
+      }
+      syncForecast();
+    }
     closePicker();render();persist(false);return;
   }
   if(e.target.id==='overlay'){ closePicker(); closeTextModal(); }
 });
 document.body.addEventListener('dblclick',e=>{
   if(window.__ignoreDbl){ window.__ignoreDbl=false; return; }
+  const sec=e.target.closest('[data-sec]');
+  if(sec){
+    e.preventDefault();
+    selectedSrc='';
+    selectedSec = selectedSec===sec.dataset.sec?'':sec.dataset.sec;
+    render();
+    toast(selectedSec?'Section selected — tap an empty section to place it':'Section cleared');
+    return;
+  }
   const slot=e.target.closest('[data-slot]');
   if(!slot) return;
   const id=slot.dataset.slot;
@@ -985,11 +1336,11 @@ document.body.addEventListener('pointercancel',endPtr);
 
 function excelDate(iso){if(!iso||!/^\d{4}-\d{2}-\d{2}/.test(iso))return '';const [y,m,d]=iso.split('-').map(Number);return Math.floor(Date.UTC(y,m-1,d)/86400000)+25569;}
 function xmlEsc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function patchCell(xml,cell,value,type){
+function patchCell(xml,cell,value,type,styleId){
   if(!cell) return xml;
   const re=new RegExp('<c r="'+cell+'"([^>]*)(?:/>|>[\\s\\S]*?</c>)');
-  const style=(xml.match(re)?(xml.match(re)[1].match(/\bs="(\d+)"/)||[])[1]:null);
-  const sAttr=style?(' s="'+style+'"'):'';
+  const style=styleId!=null&&styleId!==''?String(styleId):(xml.match(re)?(xml.match(re)[1].match(/\bs="(\d+)"/)||[])[1]:null);
+  const sAttr=(style!=null&&style!=='')?(' s="'+style+'"'):'';
   let neu;
   if(value===''||value==null) neu='<c r="'+cell+'"'+sAttr+'/>';
   else if(type==='n') neu='<c r="'+cell+'"'+sAttr+'><v>'+value+'</v></c>';
@@ -1004,9 +1355,9 @@ function patchCell(xml,cell,value,type){
   }
   return xml;
 }
-function collectWrites(){
+function collectWrites(styleMap){
   const out=[];
-  const add=(cell,value,type='s')=>{if(cell) out.push({cell,value,type});};
+  const add=(cell,value,type='s',style)=>{if(cell) out.push({cell,value,type,style});};
   add('AG1',model.duty.mod);add('AG2',model.duty.hkDay);add('AG3',model.duty.hkNight);
   add('AG4',model.duty.security);add('AG5',model.duty.eng);add('I7',model.core);
   add('F8', model.forecast&&model.forecast.weather);
@@ -1024,9 +1375,10 @@ function collectWrites(){
   people().forEach(p=>{
     add(p.nameCell,p.name);
     p.rows.forEach(r=>{
-      add(r.cells[0], r.villa, /^\d+$/.test(String(r.villa))?'n':'s');
-      add(r.cells[1], r.cat);
-      add(r.cells[2], r.status);
+      const sid=styleMap&&r.status?styleMap[r.status]:undefined;
+      add(r.cells[0], r.villa, /^\d+$/.test(String(r.villa))?'n':'s', sid);
+      add(r.cells[1], r.cat, 's', sid);
+      add(r.cells[2], r.status, 's', sid);
     });
   });
   model.moves.forEach(m=>{add(m.fromCell,m.from,/^\d+$/.test(m.from)?'n':'s');add(m.toCell,m.to,/^\d+$/.test(m.to)?'n':'s');});
@@ -1037,22 +1389,90 @@ function collectWrites(){
   (model.office||[]).forEach(x=>{if(!x.cells)return;add(x.cells.name,x.name);add(x.cells.role,x.role);add(x.cells.status,x.status);add(x.cells.contact,x.contact);});
   (model.publicArea||[]).forEach(x=>{if(!x.cells)return;add(x.cells.name,x.name);add(x.cells.role,x.role);add(x.cells.section,x.section);});
   (model.tasks||[]).forEach(x=>{if(!x.cells)return;add(x.cells.detail,x.detail);add(x.cells.area,x.area);add(x.cells.time,x.time);});
-  ['honeymoon','birthday','anniversary','upon'].forEach(k=> (model[k]||[]).forEach(x=>add(x.cell,x.v,/^\d+$/.test(String(x.v))?'n':'s')));
+  ['arrivals','departures','honeymoon','birthday','anniversary','upon','vip'].forEach(k=> (model[k]||[]).forEach(x=>add(x.cell,x.v,/^\d+$/.test(String(x.v))?'n':'s')));
   return out;
+}
+function ensureStatusStyles(stylesXml){
+  const map={};
+  if(!stylesXml) return {xml:stylesXml, map};
+  const fillBlock=stylesXml.match(/<fills([^>]*)>([\s\S]*?)<\/fills>/);
+  if(!fillBlock) return {xml:stylesXml, map};
+  let fillsInner=fillBlock[2];
+  const fillEls=[...fillsInner.matchAll(/<fill\b[\s\S]*?<\/fill>|<fill\/>/g)].map(m=>m[0]);
+  const rgbToId={};
+  fillEls.forEach((f,i)=>{
+    const rgb=(f.match(/rgb="([A-Fa-f0-9]+)"/)||[])[1];
+    if(rgb) rgbToId[rgb.toUpperCase().replace(/^FF/,'')]=i;
+  });
+  let fillCount=fillEls.length;
+  Object.entries(STATUS_RGB).forEach(([code,rgb])=>{
+    const key=rgb.toUpperCase();
+    if(rgbToId[key]==null){
+      fillsInner += '<fill><patternFill patternType="solid"><fgColor rgb="FF'+key+'"/><bgColor rgb="FF'+key+'"/></patternFill></fill>';
+      rgbToId[key]=fillCount++;
+    }
+  });
+  stylesXml=stylesXml.replace(/<fills([^>]*)>([\s\S]*?)<\/fills>/, '<fills count="'+fillCount+'">'+fillsInner+'</fills>');
+  const xfBlock=stylesXml.match(/<cellXfs([^>]*)>([\s\S]*?)<\/cellXfs>/);
+  if(!xfBlock) return {xml:stylesXml, map};
+  let xfsInner=xfBlock[2];
+  const xfs=[...xfsInner.matchAll(/<xf\b[^>]*\/>|<xf\b[\s\S]*?<\/xf>/g)].map(m=>m[0]);
+  const fillToXf={};
+  xfs.forEach((xf,i)=>{
+    const fid=(xf.match(/fillId="(\d+)"/)||[])[1];
+    if(fid!=null) fillToXf[fid]=i;
+  });
+  let xfCount=xfs.length;
+  Object.entries(STATUS_RGB).forEach(([code,rgb])=>{
+    const fid=rgbToId[rgb.toUpperCase()];
+    if(fid==null) return;
+    if(fillToXf[String(fid)]==null){
+      xfsInner += '<xf numFmtId="0" fontId="0" fillId="'+fid+'" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>';
+      fillToXf[String(fid)]=xfCount++;
+    }
+    map[code]=fillToXf[String(fid)];
+  });
+  stylesXml=stylesXml.replace(/<cellXfs([^>]*)>([\s\S]*?)<\/cellXfs>/, '<cellXfs count="'+xfCount+'">'+xfsInner+'</cellXfs>');
+  return {xml:stylesXml, map};
 }
 async function downloadXlsm(){
   if(!originalBuf||!model){toast('Import XLSM first');return;}
-  const zip=await JSZip.loadAsync(originalBuf);
-  let xml=await zip.file('xl/worksheets/sheet1.xml').async('string');
-  collectWrites().forEach(w=>{xml=patchCell(xml,w.cell,w.value,w.type);});
-  zip.file('xl/worksheets/sheet1.xml',xml);
-  const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.ms-excel.sheet.macroEnabled.12'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=(fileName||'HK-Daily').replace(/\.xlsm$/i,'')+'-updated.xlsm';
-  a.click();
-  await persist(false);
-  toast('XLSM downloaded and saved');
+  try{
+    const zip=await JSZip.loadAsync(originalBuf);
+    const sheet=zip.file('xl/worksheets/sheet1.xml');
+    if(!sheet){ toast('This workbook sheet could not be written'); return; }
+    let xml=await sheet.async('string');
+    let styleMap={};
+    const stylesFile=zip.file('xl/styles.xml');
+    if(stylesFile){
+      const packed=ensureStatusStyles(await stylesFile.async('string'));
+      zip.file('xl/styles.xml', packed.xml);
+      styleMap=packed.map;
+    }
+    collectWrites(styleMap).forEach(w=>{xml=patchCell(xml,w.cell,w.value,w.type,w.style);});
+    zip.file('xl/worksheets/sheet1.xml',xml);
+    const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.ms-excel.sheet.macroEnabled.12'});
+    const name=(fileName||'HK-Daily').replace(/\.xlsm$/i,'')+'-updated.xlsm';
+    const file=new File([blob], name, {type:'application/vnd.ms-excel.sheet.macroEnabled.12'});
+    if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
+      try{ await navigator.share({files:[file], title:name}); await persist(false); toast('XLSM shared and saved'); return; }
+      catch(err){ if(err && err.name==='AbortError') return; }
+    }
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=name;
+    a.rel='noopener';
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 2500);
+    await persist(false);
+    toast('XLSM downloaded and saved');
+  }catch(err){
+    console.error(err);
+    toast('Download failed: '+(err.message||err));
+  }
 }
 function applyImported(){
   showEditor();
@@ -1095,12 +1515,23 @@ async function restoreSaved(){
     return true;
   }catch(e){ return false; }
 }
-document.getElementById('fileIn').onchange=e=>importFile(e.target.files[0]);
-document.getElementById('fileIn2').onchange=e=>importFile(e.target.files[0]);
+function takeFile(el){
+  const f=el&&el.files&&el.files[0];
+  if(el) el.value='';
+  return importFile(f);
+}
+document.getElementById('fileIn').onchange=e=>takeFile(e.target);
+document.getElementById('fileIn2').onchange=e=>takeFile(e.target);
 document.getElementById('btnOut').onclick=downloadXlsm;
 document.getElementById('btnSave').onclick=()=>persist('Saved on this phone');
 document.getElementById('btnRoll').onclick=()=>rollYesterdayToToday();
 document.getElementById('btnText').onclick=()=>openTextModal();
+document.getElementById('textModal').addEventListener('blur', e=>{
+  const el=e.target;
+  if(!el || el.tagName!=='TEXTAREA') return;
+  if(el.id==='txMove'){ if(el.value.trim()) el.value=formatMoveText(el.value); return; }
+  if(el.value.trim()) el.value=formatRoomText(el.value);
+}, true);
 document.getElementById('btnUndo').onclick=()=>doUndo();
 document.getElementById('btnRedo').onclick=()=>doRedo();
 document.getElementById('btnOpenSaved').onclick=()=>restoreSaved();
@@ -1144,10 +1575,16 @@ document.getElementById('btnClear').onclick=async()=>{
     deferred = null;
     if(typeof toast==='function') toast('HK Daily installed on this phone');
   });
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const isiOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if(isiOS && !standalone){
+    const b=document.getElementById('btnInstall');
+    if(b) b.hidden=false;
+  }
   document.addEventListener('click', function(e){
     if(e.target && e.target.id==='btnInstall'){
       if(deferred){ deferred.prompt(); deferred.userChoice.finally(function(){ deferred=null; const b=document.getElementById('btnInstall'); if(b) b.hidden=true; }); }
-      else if(typeof toast==='function') toast('Use browser menu → Add to Home Screen');
+      else if(typeof toast==='function') toast(isiOS ? 'Share → Add to Home Screen' : 'Use the browser menu → Install / Add to Home Screen');
     }
   });
 })();
