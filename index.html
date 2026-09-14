@@ -18,16 +18,16 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
 <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png"/>
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg"/>
-<meta name="app-version" content="1.2.0"/>
-<link rel="stylesheet" href="styles.css?v=1.2.0"/>
+<meta name="app-version" content="1.6.1"/>
+<link rel="stylesheet" href="styles.css?v=1.6.1"/>
 <script>
-  window.APP_BUILD = "1.2.0";
+  window.APP_BUILD = "1.6.1";
   (function () {
-    if (sessionStorage.getItem("hk-daily-forced") === "1.2.0") return;
+    if (sessionStorage.getItem("hk-daily-forced") === "1.6.1") return;
     fetch("version.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (info) {
       var need = String(info.minVersion || info.version || "");
       if (need && need !== window.APP_BUILD) {
-        sessionStorage.setItem("hk-daily-forced", "1.2.0");
+        sessionStorage.setItem("hk-daily-forced", "1.6.1");
         var done = Promise.resolve();
         if (navigator.serviceWorker) {
           done = navigator.serviceWorker.getRegistrations().then(function (regs) {
@@ -51,6 +51,7 @@
 <div class="header">
 <div class="toolbar">
   <div class="tb-top">
+    <button class="hamburger" id="btnMenu" aria-label="Menu">☰</button>
     <b>HK Daily</b>
     <span class="file" id="fileName">Import orange HK Daily first</span>
     <button class="tb-new" id="btnClear" hidden>New</button>
@@ -63,8 +64,25 @@
     <button class="dim" id="btnUndo" disabled>Undo</button>
     <button class="dim" id="btnRedo" disabled>Redo</button>
     <button class="accent" id="btnText" disabled>From text</button>
+    <button class="accent" id="btnPick" disabled>Select rooms</button>
+    <button class="dim" id="btnZoomOut" title="Zoom out">−</button>
+    <span id="zoomLabel" class="zoomlab">100%</span>
+    <button class="dim" id="btnZoomIn" title="Zoom in">+</button>
     <button class="tb-install" id="btnInstall" hidden>Install app</button>
   </div>
+</div>
+<div class="menu" id="appMenu" hidden>
+  <button data-menu="people">People names</button>
+  <button data-menu="text">From text</button>
+  <button data-menu="pick">Select rooms</button>
+  <button data-menu="roll">To today</button>
+  <button data-menu="save">Save</button>
+  <button data-menu="out">Download XLSM</button>
+  <button data-menu="folder">Choose save folder</button>
+  <button data-menu="downloads">Use Downloads folder</button>
+  <button data-menu="zoomin">Zoom in</button>
+  <button data-menu="zoomout">Zoom out</button>
+  <button data-menu="install" id="menuInstall">Install app</button>
 </div>
 <div class="views" id="viewBar" hidden></div>
 </div>
@@ -98,13 +116,29 @@
     <button id="txApply" style="background:#c45911;color:#fff">Import &amp; update statuses</button>
   </div>
 </div>
+<div class="modal wide" id="pickModal">
+  <h3>Select rooms</h3>
+  <div class="body" id="pickBody"></div>
+  <div class="actions">
+    <button id="pkClear" style="background:#eee">Clear all</button>
+    <button id="pkCancel" style="background:#eee">Cancel</button>
+    <button id="pkApply" style="background:#c45911;color:#fff">Import &amp; update statuses</button>
+  </div>
+</div>
+<div class="modal" id="peopleModal">
+  <h3>People names</h3>
+  <div class="body" id="peopleBody"></div>
+  <div class="actions">
+    <button id="peopleClose" style="background:#eee">Close</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="app.js?v=1.2.0"></script>
+<script src="app.js?v=1.6.1"></script>
 <script>
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js?v=1.2.0", { updateViaCache: "none" }).catch(function () {});
+    navigator.serviceWorker.register("./sw.js?v=1.6.1", { updateViaCache: "none" }).catch(function () {});
   }
 </script>
 </body>

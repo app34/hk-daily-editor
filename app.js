@@ -8,6 +8,8 @@ const G2=ALLOC_COLS.slice();
 const SHEET='JULY- 2026';
 let originalBuf=null,fileName='',model=null,pick=null,savedAt='';
 let viewMode=localStorage.getItem('hk-daily-view')||'full';
+let sheetZoom=Number(localStorage.getItem('hk-zoom')||100);
+let sheetScroll={x:0,y:0,wx:0,wy:0};
 let masterQ='';
 let selectedSrc='';
 let selectedSec='';
@@ -60,6 +62,16 @@ async function persist(msg){
   if(!originalBuf||!model) return;
   savedAt=new Date().toISOString();
   try{
+    if(!window.__skipXlsmBuild){
+      const packed=await buildUpdatedXlsm();
+      if(packed && packed.buf) originalBuf=packed.buf;
+      if(packed && saveMode==='folder' && saveDirHandle){
+        try{
+          const q=saveDirHandle.queryPermission? await saveDirHandle.queryPermission({mode:'readwrite'}):'granted';
+          if(q==='granted') await writeToFolder(packed.blob, packed.name);
+        }catch(err){}
+      }
+    }
     await idbSet('pack',{
       fileName,
       savedAt,
@@ -81,7 +93,9 @@ function scheduleSave(){
 }
 function updateFileLabel(){
   const t=savedAt? new Date(savedAt).toLocaleString():'';
-  document.getElementById('fileName').textContent = fileName + (t?(' · saved '+t):'');
+  let extra=fileName + (t?(' · saved '+t):'');
+  if(saveMode==='folder' && saveDirHandle) extra+=' · folder '+saveDirHandle.name;
+  document.getElementById('fileName').textContent = extra;
 }
 function showEditor(){
   document.getElementById('gate').hidden=true;
@@ -90,6 +104,8 @@ function showEditor(){
   document.getElementById('btnSave').disabled=false;
   document.getElementById('btnClear').hidden=false;
   document.getElementById('btnText').disabled=false;
+  const pickBtn=document.getElementById('btnPick');
+  if(pickBtn) pickBtn.disabled=false;
   document.getElementById('btnRoll').disabled=false;
   document.getElementById('btnUndo').disabled=false;
   document.getElementById('btnRedo').disabled=false;
@@ -133,7 +149,16 @@ function parseWorkbook(wb){
   });
   const pack=(rs,cs)=>{const a=[];rs.forEach(r=>cs.forEach(c=>{const v=val(ws,addr(r,c));if(v)a.push({v,cell:addr(r,c)});}));return a;};
   const leave=[];
-  for(let r=67;r<=78;r++){const name=val(ws,addr(r,1));if(name)leave.push({name,type:val(ws,addr(r,4)),start:val(ws,addr(r,7)).slice(0,10),end:val(ws,addr(r,10)).slice(0,10),cells:{name:addr(r,1),type:addr(r,4),start:addr(r,7),end:addr(r,10)}});}
+  for(let r=67;r<=78;r++){
+    leave.push({
+      name:val(ws,addr(r,1)),
+      type:val(ws,addr(r,4)),
+      start:isoDate(val(ws,addr(r,7))),
+      end:isoDate(val(ws,addr(r,10))),
+      days:val(ws,addr(r,12)),
+      cells:{name:addr(r,1),type:addr(r,4),start:addr(r,7),end:addr(r,10),days:addr(r,12)}
+    });
+  }
   const laundry=[];
   for(let r=67;r<=81;r++){const name=val(ws,addr(r,26));if(name)laundry.push({no:val(ws,addr(r,25)),name,timing:val(ws,addr(r,30)),desig:val(ws,addr(r,36)),contact:val(ws,addr(r,38)),cells:{no:addr(r,25),name:addr(r,26),timing:addr(r,30),desig:addr(r,36),contact:addr(r,38)}});}
   const supervisors=[];
@@ -187,6 +212,8 @@ function ensureModel(m){
   padEmptySections(m,'beach');
   padEmptySections(m,'water');
   padTrafficLists(m);
+  ensureLeave(m);
+  seedNames(m);
   if(!m.forecast) m.forecast={weather:'☀️',occupancyPct:'',arrival:'',departure:'',villaMove:'',occupied:'',vacant:'',auto:true};
   if(m.forecast.auto!==false) m.forecast.auto=true;
   return m;
@@ -254,6 +281,68 @@ function doRedo(){
   undoStack.push(allocSnap());
   applySnap(redoStack.pop());
   render(); persist(false); toast('Redo — statuses applied again');
+}
+function isoDate(v){
+  const s=String(v||'').trim();
+  if(!s) return '';
+  const m=s.match(/(\d{4}-\d{2}-\d{2})/);
+  if(m) return m[1];
+  return s.slice(0,10);
+}
+function leaveDays(start,end){
+  const a=isoDate(start), b=isoDate(end);
+  if(!a||!b) return '';
+  const x=new Date(a+'T00:00:00'), y=new Date(b+'T00:00:00');
+  if(isNaN(x)||isNaN(y)) return '';
+  const n=Math.round((y-x)/86400000)+1;
+  return n>0?String(n):'';
+}
+function leaveTypeCode(t){
+  const s=String(t||'').trim().toUpperCase();
+  if(s==='AL'||s==='ANNUAL'||s==='ANNUAL LEAVE') return 'AL';
+  if(s==='OFF'||s==='OFF DAY'||s==='OFF DAYS') return 'OFF';
+  if(s==='ML'||s==='MEDICAL'||s==='MEDICAL LEAVE') return 'ML';
+  if(s==='EL'||s==='EMERGENCY'||s==='EMERGENCY LEAVE') return 'EL';
+  return s;
+}
+function leaveSummary(){
+  const rows=(model.leave||[]).filter(l=>String(l.name||'').trim());
+  const c={AL:0,OFF:0,ML:0,EL:0,other:0};
+  rows.forEach(l=>{
+    const k=leaveTypeCode(l.type);
+    if(c[k]==null) c.other++; else c[k]++;
+  });
+  return {total:rows.length, AL:c.AL, OFF:c.OFF, ML:c.ML, EL:c.EL};
+}
+function ensureLeave(m){
+  if(!m) return m;
+  const slots=[];
+  for(let r=67;r<=78;r++){
+    slots.push({name:'',type:'',start:'',end:'',days:'',cells:{name:addr(r,1),type:addr(r,4),start:addr(r,7),end:addr(r,10),days:addr(r,12)}});
+  }
+  (m.leave||[]).forEach((item,i)=>{
+    let hit=item.cells&&item.cells.name?slots.find(s=>s.cells.name===item.cells.name):null;
+    if(!hit) hit=slots.find(s=>!s.name);
+    if(!hit) hit=slots[Math.min(i,slots.length-1)];
+    if(!hit) return;
+    hit.name=item.name||'';
+    hit.type=item.type||'';
+    hit.start=isoDate(item.start);
+    hit.end=isoDate(item.end);
+    hit.days=leaveDays(hit.start,hit.end);
+  });
+  m.leave=slots;
+  return m;
+}
+function paintLeaveDays(){
+  (model.leave||[]).forEach((l,i)=>{
+    l.days=leaveDays(l.start,l.end);
+    const n=document.querySelector('[data-leavedays="'+i+'"]');
+    if(n) n.textContent=l.days||'';
+  });
+  const s=leaveSummary();
+  const box=document.getElementById('leaveSummary');
+  if(box) box.innerHTML=`<b>On leave ${s.total}</b> · Annual ${s.AL} · Off day ${s.OFF} · Medical ${s.ML} · Emergency ${s.EL}`;
 }
 function parseRooms(text){
   const out=[];
@@ -381,19 +470,18 @@ function normalizeTextFields(){
   const mv=document.getElementById('txMove');
   if(mv && mv.value.trim()) mv.value=formatMoveText(mv.value);
 }
-function applyTextImport(){
-  normalizeTextFields();
-  const A=new Set(parseRooms(document.getElementById('txArr').value));
-  const D=new Set(parseRooms(document.getElementById('txDep').value));
-  const O=new Set(parseRooms(document.getElementById('txOcc').value));
-  const V=new Set(parseRooms(document.getElementById('txVac').value));
-  const mv=parseMoveLines(document.getElementById('txMove').value);
-  const Hn=parseRooms(document.getElementById('txHoney')?document.getElementById('txHoney').value:'');
-  const Bd=parseRooms(document.getElementById('txBirth')?document.getElementById('txBirth').value:'');
-  const An=parseRooms(document.getElementById('txAnn')?document.getElementById('txAnn').value:'');
-  const Up=parseRooms(document.getElementById('txUpon')?document.getElementById('txUpon').value:'');
-  const Vp=parseRooms(document.getElementById('txVip')?document.getElementById('txVip').value:'');
-  if(!A.size && !D.size && !O.size && !V.size && !mv.length && !Hn.length && !Bd.length && !An.length && !Up.length && !Vp.length){ toast('Paste at least one villa number'); return; }
+function applyImportBags(bags, source){
+  const A=new Set(bags.arrivals||[]);
+  const D=new Set(bags.departures||[]);
+  const O=new Set(bags.occupied||[]);
+  const V=new Set(bags.vacant||[]);
+  const mv=bags.moves||[];
+  const Hn=bags.honeymoon||[];
+  const Bd=bags.birthday||[];
+  const An=bags.anniversary||[];
+  const Up=bags.upon||[];
+  const Vp=bags.vip||[];
+  if(!A.size && !D.size && !O.size && !V.size && !mv.length && !Hn.length && !Bd.length && !An.length && !Up.length && !Vp.length){ toast('Select or paste at least one villa'); return; }
   pushUndo();
   const fromSet=new Set(mv.map(x=>String(x.from)));
   const toSet=new Set(mv.map(x=>String(x.to)));
@@ -441,13 +529,135 @@ function applyTextImport(){
   }
   syncForecast();
   closeTextModal();
+  closePickModal();
   render();
-  persist('Statuses updated from text');
+  persist(source==='pick'?'Statuses updated from room list':'Statuses updated from text');
   const bits=[];
   if(changed) bits.push(changed+' rooms updated');
   if(flagged) bits.push(flagged+' need a manual check (red highlight)');
   if(missing.length) bits.push(missing.length+' numbers not on board');
   toast((bits.join('. ')||'No status change')+'. Undo if needed');
+}
+function applyTextImport(){
+  normalizeTextFields();
+  applyImportBags({
+    arrivals:parseRooms(document.getElementById('txArr').value),
+    departures:parseRooms(document.getElementById('txDep').value),
+    occupied:parseRooms(document.getElementById('txOcc').value),
+    vacant:parseRooms(document.getElementById('txVac').value),
+    moves:parseMoveLines(document.getElementById('txMove').value),
+    honeymoon:parseRooms(document.getElementById('txHoney')?document.getElementById('txHoney').value:''),
+    birthday:parseRooms(document.getElementById('txBirth')?document.getElementById('txBirth').value:''),
+    anniversary:parseRooms(document.getElementById('txAnn')?document.getElementById('txAnn').value:''),
+    upon:parseRooms(document.getElementById('txUpon')?document.getElementById('txUpon').value:''),
+    vip:parseRooms(document.getElementById('txVip')?document.getElementById('txVip').value:'')
+  }, 'text');
+}
+const PICK_MODES=[
+  ['arrivals','Arrival'],
+  ['departures','Departure'],
+  ['moves','Room move'],
+  ['vip','VIP Arrival'],
+  ['honeymoon','Honeymoon'],
+  ['birthday','Birthday'],
+  ['anniversary','Anniversary'],
+  ['upon','Upon Arrival'],
+  ['occupied','Occupied'],
+  ['vacant','Vacant']
+];
+let pickBags=emptyPickBags();
+let pickMode='arrivals';
+let pickFrom='';
+function emptyPickBags(){
+  return {arrivals:[],departures:[],occupied:[],vacant:[],vip:[],honeymoon:[],birthday:[],anniversary:[],upon:[],moves:[]};
+}
+function allResortRooms(){
+  const out=[];
+  [[101,139],[201,214],[301,307],[401,445],[501,526],[601,606]].forEach(([a,b])=>{
+    for(let i=a;i<=b;i++) out.push(String(i));
+  });
+  return out;
+}
+function dropPickRoom(num){
+  num=String(num);
+  if(pickMode==='moves'){
+    pickBags.moves=pickBags.moves.filter(m=>m.from!==num && m.to!==num);
+    if(pickFrom===num) pickFrom='';
+    return;
+  }
+  const list=pickBags[pickMode]||[];
+  const i=list.indexOf(num);
+  if(i>=0) list.splice(i,1);
+}
+function togglePickRoom(num){
+  num=String(num);
+  if(pickMode==='moves'){
+    if(pickBags.moves.some(m=>m.from===num||m.to===num)){
+      dropPickRoom(num);
+      renderPickModal();
+      return;
+    }
+    if(!pickFrom){ pickFrom=num; renderPickModal(); return; }
+    if(pickFrom===num){ pickFrom=''; renderPickModal(); return; }
+    pickBags.moves.push({from:pickFrom,to:num});
+    pickFrom='';
+    renderPickModal();
+    return;
+  }
+  const list=pickBags[pickMode]||(pickBags[pickMode]=[]);
+  const i=list.indexOf(num);
+  if(i>=0) list.splice(i,1); else list.push(num);
+  renderPickModal();
+}
+function roomSelected(num){
+  num=String(num);
+  if(pickMode==='moves'){
+    if(pickFrom===num) return 'from';
+    if(pickBags.moves.some(m=>m.from===num||m.to===num)) return 'on';
+    return '';
+  }
+  return (pickBags[pickMode]||[]).includes(num)?'on':'';
+}
+function renderPickModal(){
+  const box=document.getElementById('pickBody');
+  if(!box) return;
+  const rooms=allResortRooms();
+  const lab=(PICK_MODES.find(x=>x[0]===pickMode)||[])[1]||'';
+  const bits=pickMode==='moves'?pickBags.moves.map(m=>m.from+'→'+m.to):(pickBags[pickMode]||[]);
+  const empty=pickMode==='moves'?(pickFrom?'FROM '+pickFrom+' — tap TO':'Tap FROM then TO'):'None yet';
+  box.innerHTML=`
+    <div class="pmode">${PICK_MODES.map(([k,l])=>`<button type="button" class="${pickMode===k?'on':''}" data-pmode="${k}">${l}${k===pickMode&&bits.length?' · '+bits.length:''}</button>`).join('')}</div>
+    <div class="pnow"><b>${lab}</b><span>${bits.length?(pickMode==='moves'?pickBags.moves.map((m,i)=>`<button type="button" class="pch" data-prm="${i}">${m.from}→${m.to} ×</button>`).join(''):bits.map(n=>`<button type="button" class="pch" data-punpick="${n}">${n} ×</button>`).join('')):empty}</span></div>
+    <div class="prooms">${rooms.map(n=>`<button type="button" class="proom ${roomSelected(n)}" data-proom="${n}">${n}</button>`).join('')}</div>`;
+}
+function openPickModal(){
+  if(!model){ toast('Import XLSM first'); return; }
+  pickBags=emptyPickBags();
+  pickMode='arrivals';
+  pickFrom='';
+  renderPickModal();
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('pickModal').classList.add('show');
+}
+function closePickModal(){
+  const m=document.getElementById('pickModal');
+  if(m) m.classList.remove('show');
+  if(!document.getElementById('picker').classList.contains('show') && !document.getElementById('textModal').classList.contains('show') && !document.getElementById('peopleModal').classList.contains('show'))
+    document.getElementById('overlay').classList.remove('show');
+}
+function applyPickImport(){
+  applyImportBags({
+    arrivals:pickBags.arrivals.slice(),
+    departures:pickBags.departures.slice(),
+    occupied:pickBags.occupied.slice(),
+    vacant:pickBags.vacant.slice(),
+    moves:pickBags.moves.slice(),
+    honeymoon:pickBags.honeymoon.slice(),
+    birthday:pickBags.birthday.slice(),
+    anniversary:pickBags.anniversary.slice(),
+    upon:pickBags.upon.slice(),
+    vip:pickBags.vip.slice()
+  }, 'pick');
 }
 function openTextModal(){
   document.getElementById('overlay').classList.add('show');
@@ -472,6 +682,50 @@ function setPath(path,value){
   let cur=model;
   for(let i=0;i<parts.length-1;i++) cur=cur[parts[i]];
   cur[parts[parts.length-1]]=value;
+  if(/^leave\.\d+\.(start|end|type|name)$/.test(path)){
+    paintLeaveDays();
+  }
+}
+const NAME_GROUPS=[
+  ['villa','Villa attendants'],
+  ['laundry','Laundry'],
+  ['public','Public area'],
+  ['supervisor','Supervisors'],
+  ['minibar','Minibar'],
+  ['office','Office']
+];
+function seedNames(m){
+  if(!m) return m;
+  if(!m.names) m.names={villa:[],laundry:[],public:[],supervisor:[],minibar:[],office:[]};
+  const add=(key,val)=>{
+    const n=String(val||'').trim();
+    if(!n) return;
+    if(!m.names[key]) m.names[key]=[];
+    if(!m.names[key].some(x=>x.toLowerCase()===n.toLowerCase())) m.names[key].push(n);
+  };
+  (m.beach||[]).forEach(p=>add('villa',p.name));
+  (m.water||[]).forEach(p=>add('villa',p.name));
+  (m.laundry||[]).forEach(p=>add('laundry',p.name));
+  (m.publicArea||[]).forEach(p=>add('public',p.name));
+  (m.supervisors||[]).forEach(p=>add('supervisor',p.name));
+  (m.minibar||[]).forEach(p=>add('minibar',p.name));
+  (m.office||[]).forEach(p=>add('office',p.name));
+  (m.leave||[]).forEach(p=>add('villa',p.name));
+  return m;
+}
+function nameInput(path,value,list){
+  const key=String(list||'villa').replace(/^dl-/,'');
+  return `<span class="namepick"><input data-path="${path}" value="${esc(value)}" autocomplete="off" placeholder="Type or pick"><button type="button" class="namebtn" data-dd="name" data-nlist="${key}" data-path="${path}" aria-label="Pick name">▾</button></span>`;
+}
+function nameLists(){ return ''; }
+function packSection(p){
+  if(!p||!p.rows) return;
+  const data=p.rows.map(r=>({villa:r.villa,cat:r.cat,status:r.status,flag:r.flag})).filter(r=>String(r.villa||'').trim());
+  p.rows.forEach((r,i)=>{
+    const d=data[i];
+    if(d){ r.villa=d.villa; r.cat=d.cat; r.status=d.status; r.flag=d.flag; }
+    else { r.villa=''; r.cat=''; r.status=''; r.flag=''; }
+  });
 }
 function dd(path,val,kind){
   return `<button type="button" class="dd st-${esc(val||'')}" data-dd="${kind}" data-path="${path}">${esc(val||'Select')}</button>`;
@@ -481,7 +735,7 @@ function attCard(group, gi, p, pi){
   const rooms=p.rows;
   return `<article class="att dropzone" data-drop="${group}.${pi}">
     <div class="hd" style="background:${p.color}">
-      <input data-path="${group}.${pi}.name" value="${esc(p.name)}" placeholder="New section / attendant">
+      ${nameInput(group+'.'+pi+'.name', p.name, 'villa')}
       <span class="cnt">${filled(p).length} rooms</span>
     </div>
     <table>
@@ -562,7 +816,7 @@ function sheetBlock(title, group, list){
       <tr>${list.map((p,i)=>{
         const sid=group+'.'+i;
         const emptySec=isSectionEmpty(p);
-        return `<th class="nm dropzone ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color}"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" placeholder="${emptySec?'Empty section':''}" style="color:${emptySec?'#6b5a4a':'#222'};font-weight:800"></th>`;
+        return `<th class="nm dropzone ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color}"><span class="namepick"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" autocomplete="off" placeholder="${emptySec?'Empty section':''}" style="color:${emptySec?'#6b5a4a':'#222'};font-weight:800"><button type="button" class="namebtn light" data-dd="name" data-nlist="villa" data-path="${group}.${i}.name">▾</button></span></th>`;
       }).join('')}</tr>
       <tr>${list.map(()=>'<th>V#</th><th>CAT</th><th>STAT</th>').join('')}</tr>
       ${Array.from({length:max},(_,r)=>'<tr>'+list.map((p,i)=>{
@@ -676,7 +930,7 @@ function fullSheetView(){
       <tr>${list.map((p,i)=>{
         const sid=group+'.'+i;
         const emptySec=isSectionEmpty(p);
-        return `<td class="dropzone sechead ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color};padding:5px 3px"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" placeholder="${emptySec?'Empty section — drop here':''}"></td>`;
+        return `<td class="dropzone sechead ${selectedSec===sid?'sec-on':''} ${emptySec?'sec-empty':''}" data-drop="${sid}" data-sec="${sid}" colspan="3" style="background:${emptySec?'#e8e0d6':p.color};padding:5px 3px"><span class="namepick"><input class="allocname" data-path="${group}.${i}.name" value="${esc(p.name)}" autocomplete="off" placeholder="${emptySec?'Empty section — drop here':''}"><button type="button" class="namebtn light" data-dd="name" data-nlist="villa" data-path="${group}.${i}.name">▾</button></span></td>`;
       }).join('')}</tr>
       <tr>${list.map(()=>'<td class="sec">V#</td><td class="sec">CAT.</td><td class="sec">STAT.</td>').join('')}</tr>
       ${Array.from({length:max},(_,r)=>'<tr class="'+(selectedSec?(selectedSec.startsWith(group+'.')?'':''):'')+'">'+list.map((p,i)=>{
@@ -754,14 +1008,16 @@ function fullSheetView(){
       <tr>
         <td>
           <div class="sec">VILLA ATTENDANT ON LEAVE</div>
-          <table><tr><td class="tiny">NAME</td><td class="tiny">TYPE</td><td class="tiny">START</td><td class="tiny">END</td></tr>
+          <table><tr><td class="tiny">NAME</td><td class="tiny">TYPE</td><td class="tiny">START</td><td class="tiny">END</td><td class="tiny">DAYS</td></tr>
           ${(model.leave||[]).map((l,i)=>`<tr>
-            <td><input data-path="leave.${i}.name" value="${esc(l.name)}"></td>
-            <td><input data-path="leave.${i}.type" value="${esc(l.type)}"></td>
-            <td><input data-path="leave.${i}.start" type="date" value="${esc(l.start)}"></td>
-            <td><input data-path="leave.${i}.end" type="date" value="${esc(l.end)}"></td>
+            <td>${nameInput('leave.'+i+'.name',l.name,'dl-villa')}</td>
+            <td><input data-path="leave.${i}.type" value="${esc(l.type)}" list="dl-leave-type" autocomplete="off"></td>
+            <td><input data-path="leave.${i}.start" type="date" value="${esc(isoDate(l.start))}"></td>
+            <td><input data-path="leave.${i}.end" type="date" value="${esc(isoDate(l.end))}"></td>
+            <td><b data-leavedays="${i}">${esc(leaveDays(l.start,l.end)||l.days||'')}</b></td>
           </tr>`).join('')}
           </table>
+          <div id="leaveSummary" class="tiny" style="margin-top:6px;font-weight:800;color:#1f4e79">${(()=>{const s=leaveSummary();return 'On leave '+s.total+' · Annual '+s.AL+' · Off day '+s.OFF+' · Medical '+s.ML+' · Emergency '+s.EL;})()}</div>
         </td>
         <td>
           <div class="sec">COLOUR LEGEND & SHORT CODE</div>
@@ -771,7 +1027,7 @@ function fullSheetView(){
           <div class="sec">LAUNDRY</div>
           <table>${(model.laundry||[]).map((x,i)=>`<tr>
             <td>${esc(x.no)}</td>
-            <td><input data-path="laundry.${i}.name" value="${esc(x.name)}"></td>
+            <td>${nameInput('laundry.'+i+'.name',x.name,'dl-laundry')}</td>
             <td><input data-path="laundry.${i}.timing" value="${esc(x.timing)}"></td>
             <td><input data-path="laundry.${i}.desig" value="${esc(x.desig)}"></td>
           </tr>`).join('')}</table>
@@ -783,7 +1039,7 @@ function fullSheetView(){
         <td>
           <div class="sec">HOUSEKEEPING SUPERVISOR</div>
           <table>${(model.supervisors||[]).map((x,i)=>`<tr>
-            <td><input data-path="supervisors.${i}.name" value="${esc(x.name)}"></td>
+            <td>${nameInput('supervisors.'+i+'.name',x.name,'dl-supervisor')}</td>
             <td><input data-path="supervisors.${i}.role" value="${esc(x.role)}"></td>
             <td><input data-path="supervisors.${i}.status" value="${esc(x.status)}"></td>
             <td><input data-path="supervisors.${i}.section" value="${esc(x.section)}"></td>
@@ -792,13 +1048,13 @@ function fullSheetView(){
         <td>
           <div class="sec">MINIBAR DUTY</div>
           <table>${(model.minibar||[]).map((x,i)=>`<tr>
-            <td><input data-path="minibar.${i}.name" value="${esc(x.name)}"></td>
+            <td>${nameInput('minibar.'+i+'.name',x.name,'dl-minibar')}</td>
             <td><input data-path="minibar.${i}.status" value="${esc(x.status)}"></td>
             <td><input data-path="minibar.${i}.section" value="${esc(x.section)}"></td>
           </tr>`).join('')}</table>
           <div class="sec">OFFICE DUTY</div>
           <table>${(model.office||[]).map((x,i)=>`<tr>
-            <td><input data-path="office.${i}.name" value="${esc(x.name)}"></td>
+            <td>${nameInput('office.'+i+'.name',x.name,'dl-office')}</td>
             <td><input data-path="office.${i}.role" value="${esc(x.role)}"></td>
             <td><input data-path="office.${i}.status" value="${esc(x.status)}"></td>
           </tr>`).join('')}</table>
@@ -811,7 +1067,7 @@ function fullSheetView(){
           <div class="sec">PUBLIC AREA</div>
           <table>${(model.publicArea||[]).map((x,i)=>`<tr>
             <td>${esc(x.no)}</td>
-            <td><input data-path="publicArea.${i}.name" value="${esc(x.name)}"></td>
+            <td>${nameInput('publicArea.'+i+'.name',x.name,'dl-public')}</td>
             <td><input data-path="publicArea.${i}.role" value="${esc(x.role)}"></td>
             <td><input data-path="publicArea.${i}.section" value="${esc(x.section)}"></td>
           </tr>`).join('')}</table>
@@ -903,23 +1159,40 @@ function extrasBlock(){
     </div>
     <div class="card list" style="margin-top:10px">
       <h3>Leave</h3>
-      <table><tr><th>Name</th><th>Type</th><th>Start</th><th>End</th></tr>
+      <table><tr><th>Name</th><th>Type</th><th>Start</th><th>End</th><th>Days</th></tr>
       ${model.leave.map((l,i)=>`<tr>
-        <td><input data-path="leave.${i}.name" value="${esc(l.name)}"></td>
-        <td><input data-path="leave.${i}.type" value="${esc(l.type)}"></td>
-        <td><input data-path="leave.${i}.start" type="date" value="${esc(l.start)}"></td>
-        <td><input data-path="leave.${i}.end" type="date" value="${esc(l.end)}"></td>
+        <td>${nameInput('leave.'+i+'.name',l.name,'dl-villa')}</td>
+        <td><input data-path="leave.${i}.type" value="${esc(l.type)}" list="dl-leave-type"></td>
+        <td><input data-path="leave.${i}.start" type="date" value="${esc(isoDate(l.start))}"></td>
+        <td><input data-path="leave.${i}.end" type="date" value="${esc(isoDate(l.end))}"></td>
+        <td data-leavedays="${i}">${esc(leaveDays(l.start,l.end)||l.days||'')}</td>
       </tr>`).join('')}
       </table>
     </div>`;
 }
-function render(){
+function grabSheetScroll(){
+  const wrap=document.querySelector('.fullwrap')||document.querySelector('.sheetwrap');
+  if(wrap) sheetScroll={x:wrap.scrollLeft,y:wrap.scrollTop,wx:window.scrollX||0,wy:window.scrollY||window.pageYOffset||0};
+  return sheetScroll;
+}
+function putSheetScroll(){
+  const s=sheetScroll||{x:0,y:0,wx:0,wy:0};
+  const wrap=document.querySelector('.fullwrap')||document.querySelector('.sheetwrap');
+  if(wrap){ wrap.scrollLeft=s.x||0; wrap.scrollTop=s.y||0; }
+  if(s.wx||s.wy) window.scrollTo(s.wx||0,s.wy||0);
+}
+function render(opt){
+  opt=opt||{};
   if(!model) return;
+  if(!opt.resetScroll) grabSheetScroll();
+  else sheetScroll={x:0,y:0,wx:0,wy:0};
   if(!model.forecast) model.forecast={weather:'☀️',auto:true};
   syncForecast();
   const m=metrics();
   viewBar();
   document.getElementById('page').innerHTML=`
+    ${nameLists()}
+    <datalist id="dl-leave-type"><option value="AL"></option><option value="OFF"></option><option value="EL"></option><option value="ML"></option><option value="TASK FORCE"></option></datalist>
     <div class="bar">
       <div class="card"><h3>Duty</h3>
         <div class="field"><label>Date</label><input data-path="date" type="date" value="${esc(model.date)}"></div>
@@ -961,6 +1234,25 @@ function render(){
     ${viewBody()}
     ${viewMode==='full'?'':extrasBlock()}
   `;
+  applyZoom();
+  putSheetScroll();
+  requestAnimationFrame(()=>{ putSheetScroll(); });
+}
+function applyZoom(){
+  const z=Math.max(70, Math.min(160, sheetZoom||100));
+  sheetZoom=z;
+  localStorage.setItem('hk-zoom', String(z));
+  const el=document.querySelector('.fullwrap')||document.getElementById('page');
+  if(el && el.style.zoom!==String(z/100)){
+    el.style.zoom=String(z/100);
+    el.style.transform='';
+  }
+  const lab=document.getElementById('zoomLabel');
+  if(lab) lab.textContent=z+'%';
+}
+function bumpZoom(delta){
+  sheetZoom=(sheetZoom||100)+delta;
+  applyZoom();
 }
 
 function addRoom(group, pi, data){
@@ -1026,6 +1318,7 @@ function moveSection(src, dest){
     a.rows[i].villa=b.rows[i].villa; a.rows[i].cat=b.rows[i].cat; a.rows[i].status=b.rows[i].status; a.rows[i].flag=b.rows[i].flag;
     b.rows[i].villa=ta.villa; b.rows[i].cat=ta.cat; b.rows[i].status=ta.status; b.rows[i].flag=ta.flag;
   }
+  packSection(a); packSection(b);
   selectedSec='';
   syncForecast();
   render();
@@ -1049,6 +1342,8 @@ function moveRoom(src, dest){
   const data=takeRoom(sg,+spi,+sri);
   if(!data) return;
   addRoom(dg,+dpi,data);
+  packSection(model[sg][+spi]);
+  packSection(model[dg][+dpi]);
   render();
   persist((data.villa||'Room')+' moved with CAT '+(data.cat||'-')+' STAT '+(data.status||'-'));
 }
@@ -1062,6 +1357,8 @@ function moveToSlot(src, dest){
   const tmp={villa:a.villa,cat:a.cat,status:a.status};
   a.villa=b.villa; a.cat=b.cat; a.status=b.status;
   b.villa=tmp.villa; b.cat=tmp.cat; b.status=tmp.status;
+  packSection(model[sg][+spi]);
+  if(!(sg===dg && +spi===+dpi)) packSection(model[dg][+dpi]);
   selectedSrc='';
   syncForecast();
   render();
@@ -1078,13 +1375,24 @@ function openMovePicker(src){
   p.innerHTML='<h3>Move villa '+(esc(row&&row.villa)||'')+' · '+(esc(row&&row.cat)||'')+' · '+(esc(row&&row.status)||'')+'</h3>'+peopleHtml;
 }
 
-function openPicker(kind,path,cur){
-  pick={kind,path};
-  const list=kind==='weather'?WEATHER:kind==='status'?STATUSES:CATS;
-  const title=kind==='weather'?'Weather':kind==='status'?'Status':'Category';
+function openPicker(kind,path,cur,nlist){
+  pick={kind,path,nlist};
   document.getElementById('overlay').classList.add('show');
   const p=document.getElementById('picker');
   p.classList.add('show');
+  if(kind==='name'){
+    seedNames(model);
+    const key=nlist||'villa';
+    const names=(model.names&&model.names[key])||[];
+    const title=({villa:'Villa attendant',laundry:'Laundry',public:'Public area',supervisor:'Supervisor',minibar:'Minibar',office:'Office'}[key]||'Name');
+    p.innerHTML='<h3>'+title+'</h3>'+
+      (names.length?names.map(n=>`<div class="opt ${n===cur?'on':''}" data-val="${esc(n)}"><b>${esc(n)}</b></div>`).join(''):'<div class="hint" style="padding:8px">No saved names yet. Add them in Menu → People names, or type in the box.</div>')+
+      `<div class="opt" data-val=""><b>Clear</b></div>
+       <div class="hint" style="padding:8px 4px 0">Or type a name in the field — it stays editable.</div>`;
+    return;
+  }
+  const list=kind==='weather'?WEATHER:kind==='status'?STATUSES:CATS;
+  const title=kind==='weather'?'Weather':kind==='status'?'Status':'Category';
   p.innerHTML='<h3>'+title+'</h3>'+
     list.map(([c,n])=>`<div class="opt ${c===cur?'on':''}" data-val="${c}"><b style="font-size:${kind==='weather'?'22px':'13px'}">${c}</b><small>${n}</small></div>`).join('')+
     (kind==='weather'?'':`<div class="opt" data-val=""><b>Clear</b></div>`);
@@ -1112,6 +1420,12 @@ function applyField(el){
   scheduleSave();
   return true;
 }
+document.addEventListener('scroll',e=>{
+  const el=e.target;
+  if(el&&el.classList&&(el.classList.contains('fullwrap')||el.classList.contains('sheetwrap'))){
+    sheetScroll={x:el.scrollLeft,y:el.scrollTop,wx:window.scrollX||0,wy:window.scrollY||window.pageYOffset||0};
+  }
+}, true);
 document.body.addEventListener('input',e=>{
   applyField(e.target);
 });
@@ -1123,7 +1437,7 @@ document.body.addEventListener('click',e=>{
   if(vw){
     viewMode=vw.dataset.view;
     localStorage.setItem('hk-daily-view', viewMode);
-    render();
+    render({resetScroll:true});
     return;
   }
   if(e.target.closest('[data-textimport]')){ openTextModal(); return; }
@@ -1131,6 +1445,17 @@ document.body.addEventListener('click',e=>{
   if(e.target.closest('[data-redo]')){ doRedo(); return; }
   if(e.target.id==='txCancel'){ closeTextModal(); return; }
   if(e.target.id==='txApply'){ applyTextImport(); return; }
+  const pmode=e.target.closest('[data-pmode]');
+  if(pmode){ pickMode=pmode.dataset.pmode; pickFrom=''; renderPickModal(); return; }
+  const pun=e.target.closest('[data-punpick]');
+  if(pun){ dropPickRoom(pun.dataset.punpick); renderPickModal(); return; }
+  const prm=e.target.closest('[data-prm]');
+  if(prm){ pickBags.moves.splice(+prm.dataset.prm,1); renderPickModal(); return; }
+  const proom=e.target.closest('[data-proom]');
+  if(proom){ togglePickRoom(proom.dataset.proom); return; }
+  if(e.target.id==='pkCancel'){ closePickModal(); return; }
+  if(e.target.id==='pkApply'){ applyPickImport(); return; }
+  if(e.target.id==='pkClear'){ pickBags=emptyPickBags(); pickFrom=''; renderPickModal(); return; }
   const secEl=e.target.closest('[data-sec]');
   if(secEl && !e.target.closest('input,button,select')){
     const sid=secEl.dataset.sec;
@@ -1225,11 +1550,18 @@ document.body.addEventListener('click',e=>{
     syncForecast(); render(); persist(false); return;
   }
   const btn=e.target.closest('[data-dd]');
-  if(btn){openPicker(btn.dataset.dd, btn.dataset.path, btn.textContent.trim()==='Select'?'':btn.textContent.trim());return;}
+  if(btn){
+    const wrap=btn.closest('.namepick');
+    const typed=wrap&&wrap.querySelector('input')?wrap.querySelector('input').value:'';
+    const cur=btn.dataset.dd==='name'?typed:(btn.textContent.trim()==='Select'?'':btn.textContent.trim());
+    openPicker(btn.dataset.dd, btn.dataset.path, cur, btn.dataset.nlist);
+    return;
+  }
   const opt=e.target.closest('.opt');
   if(opt&&pick){
     if(pick.kind==='move' && opt.dataset.dest){ const src=pick.src; closePicker(); moveRoom(src, opt.dataset.dest); return; }
     setPath(pick.path,opt.dataset.val);
+    if(pick.kind==='name') seedNames(model);
     if(String(pick.path).includes('.status')){
       const parts=pick.path.split('.');
       if(parts[2]==='rows'){
@@ -1240,7 +1572,7 @@ document.body.addEventListener('click',e=>{
     }
     closePicker();render();persist(false);return;
   }
-  if(e.target.id==='overlay'){ closePicker(); closeTextModal(); }
+  if(e.target.id==='overlay'){ closePicker(); closeTextModal(); if(typeof closePickModal==='function') closePickModal(); if(typeof closePeopleModal==='function') closePeopleModal(); }
 });
 document.body.addEventListener('dblclick',e=>{
   if(window.__ignoreDbl){ window.__ignoreDbl=false; return; }
@@ -1338,14 +1670,15 @@ function excelDate(iso){if(!iso||!/^\d{4}-\d{2}-\d{2}/.test(iso))return '';const
 function xmlEsc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function patchCell(xml,cell,value,type,styleId){
   if(!cell) return xml;
-  const re=new RegExp('<c r="'+cell+'"([^>]*)(?:/>|>[\\s\\S]*?</c>)');
-  const style=styleId!=null&&styleId!==''?String(styleId):(xml.match(re)?(xml.match(re)[1].match(/\bs="(\d+)"/)||[])[1]:null);
+  const re=new RegExp('<c\\b(?=[^>]*\\br="'+cell+'")[^>]*?(?:/>|>[\\s\\S]*?</c>)');
+  const hit=xml.match(re);
+  const style=styleId!=null&&styleId!==''?String(styleId):(hit&&((hit[0].match(/\bs="(\d+)"/)||[])[1])||null);
   const sAttr=(style!=null&&style!=='')?(' s="'+style+'"'):'';
   let neu;
   if(value===''||value==null) neu='<c r="'+cell+'"'+sAttr+'/>';
-  else if(type==='n') neu='<c r="'+cell+'"'+sAttr+'><v>'+value+'</v></c>';
+  else if(type==='n') neu='<c r="'+cell+'"'+sAttr+' t="n"><v>'+value+'</v></c>';
   else neu='<c r="'+cell+'"'+sAttr+' t="inlineStr"><is><t xml:space="preserve">'+xmlEsc(value)+'</t></is></c>';
-  if(re.test(xml)) return xml.replace(re,neu);
+  if(hit) return xml.replace(re,neu);
   const rowNum=parseInt(cell.replace(/^[A-Z]+/,''),10);
   const rowRe=new RegExp('(<row r="'+rowNum+'"[^>]*>)([\\s\\S]*?)(</row>)');
   if(rowRe.test(xml)) return xml.replace(rowRe,(_,a,mid,b)=>a+mid+neu+b);
@@ -1382,7 +1715,13 @@ function collectWrites(styleMap){
     });
   });
   model.moves.forEach(m=>{add(m.fromCell,m.from,/^\d+$/.test(m.from)?'n':'s');add(m.toCell,m.to,/^\d+$/.test(m.to)?'n':'s');});
-  model.leave.forEach(l=>{add(l.cells.name,l.name);add(l.cells.type,l.type);add(l.cells.start,l.start?excelDate(l.start):'','n');add(l.cells.end,l.end?excelDate(l.end):'','n');});
+  (model.leave||[]).forEach(l=>{
+    if(!l.cells) return;
+    add(l.cells.name,l.name);
+    add(l.cells.type,l.type);
+    add(l.cells.start,l.start?excelDate(isoDate(l.start)):'','n');
+    add(l.cells.end,l.end?excelDate(isoDate(l.end)):'','n');
+  });
   (model.laundry||[]).forEach(x=>{if(!x.cells)return;add(x.cells.name,x.name);add(x.cells.timing,x.timing);add(x.cells.desig,x.desig);add(x.cells.contact,x.contact);});
   (model.supervisors||[]).forEach(x=>{if(!x.cells)return;add(x.cells.name,x.name);add(x.cells.role,x.role);add(x.cells.status,x.status);add(x.cells.section,x.section);add(x.cells.contact,x.contact);});
   (model.minibar||[]).forEach(x=>{if(!x.cells)return;add(x.cells.name,x.name);add(x.cells.status,x.status);add(x.cells.section,x.section);});
@@ -1435,24 +1774,107 @@ function ensureStatusStyles(stylesXml){
   stylesXml=stylesXml.replace(/<cellXfs([^>]*)>([\s\S]*?)<\/cellXfs>/, '<cellXfs count="'+xfCount+'">'+xfsInner+'</cellXfs>');
   return {xml:stylesXml, map};
 }
+let saveDirHandle=null;
+let saveMode=localStorage.getItem('hk-save-mode')||'download';
+async function loadSaveFolder(){
+  try{
+    const pack=await idbGet('saveFolder');
+    if(pack && pack.handle) saveDirHandle=pack.handle;
+    if(pack && pack.mode) saveMode=pack.mode;
+    else saveMode=localStorage.getItem('hk-save-mode')||saveMode||'download';
+  }catch(err){}
+}
+async function rememberSaveFolder(handle, mode){
+  if(handle) saveDirHandle=handle;
+  if(mode) saveMode=mode;
+  localStorage.setItem('hk-save-mode', saveMode);
+  try{ await idbSet('saveFolder', {handle:saveDirHandle||null, mode:saveMode, name:saveDirHandle?saveDirHandle.name:''}); }catch(err){}
+  updateFileLabel();
+}
+async function ensureFolderPerm(){
+  if(!saveDirHandle || typeof saveDirHandle.queryPermission!=='function') return false;
+  const opts={mode:'readwrite'};
+  try{
+    let q=await saveDirHandle.queryPermission(opts);
+    if(q!=='granted') q=await saveDirHandle.requestPermission(opts);
+    return q==='granted';
+  }catch(err){ return false; }
+}
+async function chooseSaveFolder(){
+  if(!window.showDirectoryPicker){
+    toast('This browser cannot keep a folder. Use Download for the normal Downloads folder.');
+    return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({id:'hk-daily-xlsm', mode:'readwrite', startIn:'documents'});
+    await rememberSaveFolder(handle, 'folder');
+    toast('Folder remembered: '+handle.name+'. Download will save there.');
+  }catch(err){
+    if(err && err.name==='AbortError') return;
+    toast('Folder not selected');
+  }
+}
+async function useNormalDownload(){
+  await rememberSaveFolder(saveDirHandle, 'download');
+  toast('Normal download — files go to the Downloads folder');
+}
+async function writeToFolder(blob, name){
+  const ok=await ensureFolderPerm();
+  if(!ok) throw new Error('Folder permission needed');
+  const fh=await saveDirHandle.getFileHandle(name, {create:true});
+  const w=await fh.createWritable();
+  await w.write(blob);
+  await w.close();
+}
+async function buildUpdatedXlsm(){
+  if(!originalBuf||!model||typeof JSZip==='undefined') return null;
+  const zip=await JSZip.loadAsync(originalBuf);
+  const sheet=zip.file('xl/worksheets/sheet1.xml');
+  if(!sheet) return null;
+  let xml=await sheet.async('string');
+  let styleMap={};
+  const stylesFile=zip.file('xl/styles.xml');
+  if(stylesFile){
+    const packed=ensureStatusStyles(await stylesFile.async('string'));
+    zip.file('xl/styles.xml', packed.xml);
+    styleMap=packed.map;
+  }
+  collectWrites(styleMap).forEach(w=>{xml=patchCell(xml,w.cell,w.value,w.type,w.style);});
+  zip.file('xl/worksheets/sheet1.xml',xml);
+  const wbFile=zip.file('xl/workbook.xml');
+  if(wbFile){
+    let wbxml=await wbFile.async('string');
+    if(/<calcPr[\s>]/.test(wbxml)){
+      if(!/fullCalcOnLoad=/.test(wbxml)) wbxml=wbxml.replace('<calcPr','<calcPr fullCalcOnLoad="1"');
+    } else {
+      wbxml=wbxml.replace('</workbook>','<calcPr fullCalcOnLoad="1" calcMode="auto"/></workbook>');
+    }
+    zip.file('xl/workbook.xml',wbxml);
+  }
+  const buf=await zip.generateAsync({type:'arraybuffer'});
+  const blob=new Blob([buf],{type:'application/vnd.ms-excel.sheet.macroEnabled.12'});
+  const name=(fileName&&/\.xlsm$/i.test(fileName))?fileName:((fileName||'HK Daily')+'.xlsm');
+  return {buf,blob,name};
+}
 async function downloadXlsm(){
   if(!originalBuf||!model){toast('Import XLSM first');return;}
   try{
-    const zip=await JSZip.loadAsync(originalBuf);
-    const sheet=zip.file('xl/worksheets/sheet1.xml');
-    if(!sheet){ toast('This workbook sheet could not be written'); return; }
-    let xml=await sheet.async('string');
-    let styleMap={};
-    const stylesFile=zip.file('xl/styles.xml');
-    if(stylesFile){
-      const packed=ensureStatusStyles(await stylesFile.async('string'));
-      zip.file('xl/styles.xml', packed.xml);
-      styleMap=packed.map;
+    const packed=await buildUpdatedXlsm();
+    if(!packed){ toast('This workbook sheet could not be written'); return; }
+    originalBuf=packed.buf;
+    const blob=packed.blob;
+    const name=packed.name;
+    if(saveMode==='folder' && saveDirHandle){
+      try{
+        await writeToFolder(blob, name);
+        await persist(false);
+        toast('Saved to folder '+saveDirHandle.name);
+        return;
+      }catch(err){
+        console.error(err);
+        toast('Folder not available — using normal download');
+      }
     }
-    collectWrites(styleMap).forEach(w=>{xml=patchCell(xml,w.cell,w.value,w.type,w.style);});
-    zip.file('xl/worksheets/sheet1.xml',xml);
-    const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.ms-excel.sheet.macroEnabled.12'});
-    const name=(fileName||'HK-Daily').replace(/\.xlsm$/i,'')+'-updated.xlsm';
     const file=new File([blob], name, {type:'application/vnd.ms-excel.sheet.macroEnabled.12'});
     if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
       try{ await navigator.share({files:[file], title:name}); await persist(false); toast('XLSM shared and saved'); return; }
@@ -1468,7 +1890,7 @@ async function downloadXlsm(){
     a.click();
     setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 2500);
     await persist(false);
-    toast('XLSM downloaded and saved');
+    toast('XLSM downloaded to Downloads');
   }catch(err){
     console.error(err);
     toast('Download failed: '+(err.message||err));
@@ -1526,12 +1948,23 @@ document.getElementById('btnOut').onclick=downloadXlsm;
 document.getElementById('btnSave').onclick=()=>persist('Saved on this phone');
 document.getElementById('btnRoll').onclick=()=>rollYesterdayToToday();
 document.getElementById('btnText').onclick=()=>openTextModal();
-document.getElementById('textModal').addEventListener('blur', e=>{
-  const el=e.target;
+if(document.getElementById('btnPick')) document.getElementById('btnPick').onclick=()=>openPickModal();
+function liveFormatArea(el){
   if(!el || el.tagName!=='TEXTAREA') return;
-  if(el.id==='txMove'){ if(el.value.trim()) el.value=formatMoveText(el.value); return; }
-  if(el.value.trim()) el.value=formatRoomText(el.value);
-}, true);
+  const atEnd=el.selectionStart===el.value.length;
+  if(el.id==='txMove'){
+    const next=formatMoveText(el.value);
+    if(next && atEnd) el.value=next;
+    return;
+  }
+  if(/^tx(Arr|Dep|Occ|Vac|Honey|Birth|Ann|Upon|Vip)$/.test(el.id)){
+    const next=formatRoomText(el.value);
+    if(next && atEnd) el.value=next;
+  }
+}
+document.getElementById('textModal').addEventListener('blur', e=>liveFormatArea(e.target), true);
+document.getElementById('textModal').addEventListener('input', e=>liveFormatArea(e.target));
+document.getElementById('btnUndo').onclick=()=>doUndo();
 document.getElementById('btnUndo').onclick=()=>doUndo();
 document.getElementById('btnRedo').onclick=()=>doRedo();
 document.getElementById('btnOpenSaved').onclick=()=>restoreSaved();
@@ -1557,6 +1990,7 @@ document.getElementById('btnClear').onclick=async()=>{
     b.style.display='block';
     b.textContent='Open last saved: '+meta.fileName;
   }
+  await loadSaveFolder();
   await restoreSaved();
 })();
 
@@ -1588,3 +2022,83 @@ document.getElementById('btnClear').onclick=async()=>{
     }
   });
 })();
+
+function toggleMenu(on){
+  const m=document.getElementById('appMenu');
+  if(!m) return;
+  if(on==null) m.hidden=!m.hidden;
+  else m.hidden=!on;
+}
+function openPeopleModal(){
+  if(!model){ toast('Import XLSM first'); return; }
+  seedNames(model);
+  renderPeople();
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('peopleModal').classList.add('show');
+}
+function closePeopleModal(){
+  document.getElementById('peopleModal').classList.remove('show');
+  if(!document.getElementById('picker').classList.contains('show') && !document.getElementById('textModal').classList.contains('show'))
+    document.getElementById('overlay').classList.remove('show');
+  render();
+}
+function renderPeople(){
+  seedNames(model);
+  const box=document.getElementById('peopleBody');
+  if(!box) return;
+  box.innerHTML=NAME_GROUPS.map(([key,title])=>{
+    const list=model.names[key]||[];
+    return `<div class="plist"><h4>${title}</h4>
+      ${list.map((n,i)=>`<div class="prow"><input data-pname="${key}.${i}" value="${esc(n)}"><button data-pdel="${key}.${i}">Remove</button></div>`).join('')}
+      <div class="prow"><input id="padd-${key}" placeholder="Add name"><button data-padd="${key}">Add</button></div>
+    </div>`;
+  }).join('');
+}
+document.getElementById('btnMenu').onclick=()=>toggleMenu();
+document.getElementById('btnZoomIn').onclick=()=>bumpZoom(10);
+document.getElementById('btnZoomOut').onclick=()=>bumpZoom(-10);
+document.getElementById('peopleClose').onclick=()=>closePeopleModal();
+document.getElementById('appMenu').addEventListener('click',e=>{
+  const b=e.target.closest('[data-menu]');
+  if(!b) return;
+  toggleMenu(false);
+  const act=b.dataset.menu;
+  if(act==='people') openPeopleModal();
+  else if(act==='text') openTextModal();
+  else if(act==='pick') openPickModal();
+  else if(act==='roll') rollYesterdayToToday();
+  else if(act==='save') persist('Saved on this phone');
+  else if(act==='out') downloadXlsm();
+  else if(act==='folder') chooseSaveFolder();
+  else if(act==='downloads') useNormalDownload();
+  else if(act==='zoomin') bumpZoom(10);
+  else if(act==='zoomout') bumpZoom(-10);
+  else if(act==='install') document.getElementById('btnInstall').click();
+});
+document.getElementById('peopleModal').addEventListener('click',e=>{
+  const add=e.target.closest('[data-padd]');
+  if(add){
+    const key=add.dataset.padd;
+    const inp=document.getElementById('padd-'+key);
+    const n=(inp&&inp.value||'').trim();
+    if(!n) return;
+    if(!model.names[key]) model.names[key]=[];
+    if(!model.names[key].some(x=>x.toLowerCase()===n.toLowerCase())) model.names[key].push(n);
+    persist(false); renderPeople(); return;
+  }
+  const del=e.target.closest('[data-pdel]');
+  if(del){
+    const [key,i]=del.dataset.pdel.split('.');
+    (model.names[key]||[]).splice(+i,1);
+    persist(false); renderPeople();
+  }
+});
+document.getElementById('peopleModal').addEventListener('change',e=>{
+  const el=e.target.closest('[data-pname]');
+  if(!el) return;
+  const [key,i]=el.dataset.pname.split('.');
+  if(model.names[key] && model.names[key][+i]!=null) model.names[key][+i]=el.value.trim();
+  persist(false);
+});
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") persist(false); });
+window.addEventListener("pagehide",()=>persist(false));
