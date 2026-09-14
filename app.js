@@ -214,6 +214,7 @@ function ensureModel(m){
   padTrafficLists(m);
   ensureLeave(m);
   seedNames(m);
+  seedLeaveTypes(m);
   if(!m.forecast) m.forecast={weather:'☀️',occupancyPct:'',arrival:'',departure:'',villaMove:'',occupied:'',vacant:'',auto:true};
   if(m.forecast.auto!==false) m.forecast.auto=true;
   return m;
@@ -683,6 +684,11 @@ function setPath(path,value){
   for(let i=0;i<parts.length-1;i++) cur=cur[parts[i]];
   cur[parts[parts.length-1]]=value;
   if(/^leave\.\d+\.(start|end|type|name)$/.test(path)){
+    if(/\.type$/.test(path) && value){
+      seedLeaveTypes(model);
+      const t=String(value).trim();
+      if(t && !model.leaveTypes.some(x=>x.toLowerCase()===t.toLowerCase())) model.leaveTypes.push(t);
+    }
     paintLeaveDays();
   }
 }
@@ -694,6 +700,12 @@ const NAME_GROUPS=[
   ['minibar','Minibar'],
   ['office','Office']
 ];
+const DEFAULT_LEAVE_TYPES=['TASK FORCE','ON DUTY','AL','OFF','ML','NP','EL'];
+function seedLeaveTypes(m){
+  if(!m) return m;
+  if(!Array.isArray(m.leaveTypes) || !m.leaveTypes.length) m.leaveTypes=DEFAULT_LEAVE_TYPES.slice();
+  return m;
+}
 function seedNames(m){
   if(!m) return m;
   if(!m.names) m.names={villa:[],laundry:[],public:[],supervisor:[],minibar:[],office:[]};
@@ -872,7 +884,9 @@ function trafficGrid(key, cls){
     body+='</tr>';
   }
   const n=(list||[]).filter(x=>String(x.v||'').trim()).length;
+  const titles={arrivals:'ARRIVAL',departures:'DEPATURE',honeymoon:'HONEYMOON',birthday:'BIRTHDAY',anniversary:'ANNIVERSARY',upon:'UPON ARRIVAL',vip:'VIP ARRIVAL'};
   return `<td class="tblock ${cls||''}">
+    <div class="sec ttitle">${titles[key]||key.toUpperCase()} <small>${n}</small></div>
     <table class="tgrid">${body}</table>
   </td>`;
 }
@@ -889,7 +903,9 @@ function moveGrid(){
     }
     body+='</tr>';
   }
+  const mn=(model.moves||[]).filter(x=>String(x.from||'').trim()||String(x.to||'').trim()).length;
   return `<td class="tblock">
+    <div class="sec ttitle">VILLA MOVE <small>${mn}</small></div>
     <table class="tgrid tmoves">${body}</table>
   </td>`;
 }
@@ -1011,7 +1027,7 @@ function fullSheetView(){
           <table><tr><td class="tiny">NAME</td><td class="tiny">TYPE</td><td class="tiny">START</td><td class="tiny">END</td><td class="tiny">DAYS</td></tr>
           ${(model.leave||[]).map((l,i)=>`<tr>
             <td>${nameInput('leave.'+i+'.name',l.name,'dl-villa')}</td>
-            <td><input data-path="leave.${i}.type" value="${esc(l.type)}" list="dl-leave-type" autocomplete="off"></td>
+            <td>${nameInput('leave.'+i+'.type',l.type,'leaveType')}</td>
             <td><input data-path="leave.${i}.start" type="date" value="${esc(isoDate(l.start))}"></td>
             <td><input data-path="leave.${i}.end" type="date" value="${esc(isoDate(l.end))}"></td>
             <td><b data-leavedays="${i}">${esc(leaveDays(l.start,l.end)||l.days||'')}</b></td>
@@ -1162,7 +1178,7 @@ function extrasBlock(){
       <table><tr><th>Name</th><th>Type</th><th>Start</th><th>End</th><th>Days</th></tr>
       ${model.leave.map((l,i)=>`<tr>
         <td>${nameInput('leave.'+i+'.name',l.name,'dl-villa')}</td>
-        <td><input data-path="leave.${i}.type" value="${esc(l.type)}" list="dl-leave-type"></td>
+        <td>${nameInput('leave.'+i+'.type',l.type,'leaveType')}</td>
         <td><input data-path="leave.${i}.start" type="date" value="${esc(isoDate(l.start))}"></td>
         <td><input data-path="leave.${i}.end" type="date" value="${esc(isoDate(l.end))}"></td>
         <td data-leavedays="${i}">${esc(leaveDays(l.start,l.end)||l.days||'')}</td>
@@ -1382,13 +1398,14 @@ function openPicker(kind,path,cur,nlist){
   p.classList.add('show');
   if(kind==='name'){
     seedNames(model);
+    seedLeaveTypes(model);
     const key=nlist||'villa';
-    const names=(model.names&&model.names[key])||[];
-    const title=({villa:'Villa attendant',laundry:'Laundry',public:'Public area',supervisor:'Supervisor',minibar:'Minibar',office:'Office'}[key]||'Name');
+    const names=key==='leaveType'?(model.leaveTypes||[]):((model.names&&model.names[key])||[]);
+    const title=({villa:'Villa attendant',laundry:'Laundry',public:'Public area',supervisor:'Supervisor',minibar:'Minibar',office:'Office',leaveType:'Leave type'}[key]||'Name');
     p.innerHTML='<h3>'+title+'</h3>'+
-      (names.length?names.map(n=>`<div class="opt ${n===cur?'on':''}" data-val="${esc(n)}"><b>${esc(n)}</b></div>`).join(''):'<div class="hint" style="padding:8px">No saved names yet. Add them in Menu → Team Members, or type in the box.</div>')+
+      (names.length?names.map(n=>`<div class="opt ${n===cur?'on':''}" data-val="${esc(n)}"><b>${esc(n)}</b></div>`).join(''):'<div class="hint" style="padding:8px">No saved items yet. Add them in the menu, or type in the box.</div>')+
       `<div class="opt" data-val=""><b>Clear</b></div>
-       <div class="hint" style="padding:8px 4px 0">Or type a name in the field — it stays editable.</div>`;
+       <div class="hint" style="padding:8px 4px 0">Or type in the field — it stays editable.</div>`;
     return;
   }
   const list=kind==='weather'?WEATHER:kind==='status'?STATUSES:CATS;
@@ -1572,7 +1589,7 @@ document.body.addEventListener('click',e=>{
     }
     closePicker();render();persist(false);return;
   }
-  if(e.target.id==='overlay'){ closePicker(); closeTextModal(); if(typeof closePickModal==='function') closePickModal(); if(typeof closePeopleModal==='function') closePeopleModal(); }
+  if(e.target.id==='overlay'){ closePicker(); closeTextModal(); if(typeof closePickModal==='function') closePickModal(); if(typeof closePeopleModal==='function') closePeopleModal(); if(typeof closeLeaveTypeModal==='function') closeLeaveTypeModal(); }
 });
 document.body.addEventListener('dblclick',e=>{
   if(window.__ignoreDbl){ window.__ignoreDbl=false; return; }
@@ -2023,6 +2040,31 @@ document.getElementById('btnClear').onclick=async()=>{
   });
 })();
 
+function openLeaveTypeModal(){
+  if(!model){ toast('Import XLSM first'); return; }
+  seedLeaveTypes(model);
+  renderLeaveTypes();
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('leaveTypeModal').classList.add('show');
+}
+function closeLeaveTypeModal(){
+  const m=document.getElementById('leaveTypeModal');
+  if(m) m.classList.remove('show');
+  if(!document.getElementById('picker').classList.contains('show') && !document.getElementById('textModal').classList.contains('show') && !document.getElementById('peopleModal').classList.contains('show') && !document.getElementById('pickModal').classList.contains('show'))
+    document.getElementById('overlay').classList.remove('show');
+  render();
+}
+function renderLeaveTypes(){
+  seedLeaveTypes(model);
+  const box=document.getElementById('leaveTypeBody');
+  if(!box) return;
+  const list=model.leaveTypes||[];
+  box.innerHTML=`<div class="plist"><h4>Leave types</h4>
+    ${list.map((n,i)=>`<div class="prow"><input data-ltype="${i}" value="${esc(n)}"><button data-ltdel="${i}">Remove</button></div>`).join('')}
+    <div class="prow"><input id="ltadd" placeholder="Add type e.g. NP"><button data-ltadd="1">Add</button></div>
+    <p class="hint">Used in the leave table dropdown. You can still type a new type in the sheet.</p>
+  </div>`;
+}
 function toggleMenu(on){
   const m=document.getElementById('appMenu');
   if(!m) return;
@@ -2058,12 +2100,36 @@ document.getElementById('btnMenu').onclick=()=>toggleMenu();
 document.getElementById('btnZoomIn').onclick=()=>bumpZoom(10);
 document.getElementById('btnZoomOut').onclick=()=>bumpZoom(-10);
 document.getElementById('peopleClose').onclick=()=>closePeopleModal();
+if(document.getElementById('leaveTypeClose')) document.getElementById('leaveTypeClose').onclick=()=>closeLeaveTypeModal();
+document.getElementById('leaveTypeModal').addEventListener('click',e=>{
+  if(e.target.closest('[data-ltadd]')){
+    const inp=document.getElementById('ltadd');
+    const n=(inp&&inp.value||'').trim();
+    if(!n) return;
+    seedLeaveTypes(model);
+    if(!model.leaveTypes.some(x=>x.toLowerCase()===n.toLowerCase())) model.leaveTypes.push(n);
+    persist(false); renderLeaveTypes(); return;
+  }
+  const del=e.target.closest('[data-ltdel]');
+  if(del){
+    model.leaveTypes.splice(+del.dataset.ltdel,1);
+    persist(false); renderLeaveTypes();
+  }
+});
+document.getElementById('leaveTypeModal').addEventListener('change',e=>{
+  const el=e.target.closest('[data-ltype]');
+  if(!el) return;
+  const i=+el.dataset.ltype;
+  if(model.leaveTypes && model.leaveTypes[i]!=null) model.leaveTypes[i]=el.value.trim();
+  persist(false);
+});
 document.getElementById('appMenu').addEventListener('click',e=>{
   const b=e.target.closest('[data-menu]');
   if(!b) return;
   toggleMenu(false);
   const act=b.dataset.menu;
   if(act==='people') openPeopleModal();
+  else if(act==='leavetypes') openLeaveTypeModal();
   else if(act==='text') openTextModal();
   else if(act==='pick') openPickModal();
   else if(act==='roll') rollYesterdayToToday();

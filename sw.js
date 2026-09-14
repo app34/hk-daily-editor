@@ -1,9 +1,9 @@
-const CACHE = "hk-daily-1.6.2";
+const CACHE = "hk-daily-1.6.3";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=1.6.2",
-  "./app.js?v=1.6.2",
+  "./styles.css?v=1.6.3",
+  "./app.js?v=1.6.3",
   "./manifest.json",
   "./version.json",
   "./icons/icon.svg",

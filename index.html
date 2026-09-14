@@ -18,16 +18,16 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
 <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png"/>
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg"/>
-<meta name="app-version" content="1.6.2"/>
-<link rel="stylesheet" href="styles.css?v=1.6.2"/>
+<meta name="app-version" content="1.6.3"/>
+<link rel="stylesheet" href="styles.css?v=1.6.3"/>
 <script>
-  window.APP_BUILD = "1.6.2";
+  window.APP_BUILD = "1.6.3";
   (function () {
-    if (sessionStorage.getItem("hk-daily-forced") === "1.6.2") return;
+    if (sessionStorage.getItem("hk-daily-forced") === "1.6.3") return;
     fetch("version.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (info) {
       var need = String(info.minVersion || info.version || "");
       if (need && need !== window.APP_BUILD) {
-        sessionStorage.setItem("hk-daily-forced", "1.6.2");
+        sessionStorage.setItem("hk-daily-forced", "1.6.3");
         var done = Promise.resolve();
         if (navigator.serviceWorker) {
           done = navigator.serviceWorker.getRegistrations().then(function (regs) {
@@ -73,6 +73,7 @@
 </div>
 <div class="menu" id="appMenu" hidden>
   <button data-menu="people">Team Members</button>
+  <button data-menu="leavetypes">Leave types</button>
   <button data-menu="text">From text</button>
   <button data-menu="pick">Select rooms</button>
   <button data-menu="roll">To today</button>
@@ -125,6 +126,13 @@
     <button id="pkApply" style="background:#c45911;color:#fff">Import &amp; update statuses</button>
   </div>
 </div>
+<div class="modal" id="leaveTypeModal">
+  <h3>Leave types</h3>
+  <div class="body" id="leaveTypeBody"></div>
+  <div class="actions">
+    <button id="leaveTypeClose" style="background:#eee">Close</button>
+  </div>
+</div>
 <div class="modal" id="peopleModal">
   <h3>Team Members</h3>
   <div class="body" id="peopleBody"></div>
@@ -135,10 +143,10 @@
 <div class="toast" id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="app.js?v=1.6.2"></script>
+<script src="app.js?v=1.6.3"></script>
 <script>
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js?v=1.6.2", { updateViaCache: "none" }).catch(function () {});
+    navigator.serviceWorker.register("./sw.js?v=1.6.3", { updateViaCache: "none" }).catch(function () {});
   }
 </script>
 </body>

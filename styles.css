@@ -246,3 +246,6 @@ input,select,textarea,.dd{-webkit-user-select:text}
 @media (min-width:720px){
   .prooms{grid-template-columns:repeat(8,1fr)}
 }
+
+.ttitle{margin:0 0 2px;padding:4px 3px}
+.traffic .tblock{vertical-align:top}
