@@ -6,7 +6,7 @@ const ALLOC_COLS=[1,5,9,13,17,21,25,29,33,37];
 const G1=ALLOC_COLS.slice();
 const G2=ALLOC_COLS.slice();
 const SHEET='JULY- 2026';
-let originalBuf=null,fileName='',model=null,pick=null,savedAt='';
+let originalBuf=null,sourceBuf=null,fileName='',model=null,pick=null,savedAt='';
 let viewMode=localStorage.getItem('hk-daily-view')||'full';
 let sheetZoom=Number(localStorage.getItem('hk-zoom')||100);
 let sheetScroll={x:0,y:0,wx:0,wy:0};
@@ -59,23 +59,13 @@ async function idbGet(key){
   });
 }
 async function persist(msg){
-  if(!originalBuf||!model) return;
+  if(!(sourceBuf||originalBuf)||!model) return;
   savedAt=new Date().toISOString();
   try{
-    if(!window.__skipXlsmBuild){
-      const packed=await buildUpdatedXlsm();
-      if(packed && packed.buf) originalBuf=packed.buf;
-      if(packed && saveMode==='folder' && saveDirHandle){
-        try{
-          const q=saveDirHandle.queryPermission? await saveDirHandle.queryPermission({mode:'readwrite'}):'granted';
-          if(q==='granted') await writeToFolder(packed.blob, packed.name);
-        }catch(err){}
-      }
-    }
     await idbSet('pack',{
       fileName,
       savedAt,
-      buf:originalBuf,
+      buf:sourceBuf||originalBuf,
       model,
       undoStack,
       redoStack
@@ -1835,17 +1825,32 @@ async function useNormalDownload(){
   await rememberSaveFolder(saveDirHandle, 'download');
   toast('Normal download — files go to the Downloads folder');
 }
+function xlsmStamp(){
+  const d=new Date();
+  const p=n=>String(n).padStart(2,'0');
+  return p(d.getDate())+'-'+p(d.getMonth()+1)+'-'+d.getFullYear()+'_'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds());
+}
 async function writeToFolder(blob, name){
   const ok=await ensureFolderPerm();
   if(!ok) throw new Error('Folder permission needed');
-  const fh=await saveDirHandle.getFileHandle(name, {create:true});
-  const w=await fh.createWritable();
-  await w.write(blob);
-  await w.close();
+  async function put(n){
+    const fh=await saveDirHandle.getFileHandle(n, {create:true});
+    const w=await fh.createWritable({keepExistingData:false});
+    await w.write(blob);
+    await w.close();
+    return n;
+  }
+  try{
+    return await put(name);
+  }catch(err){
+    const alt=String(name||'HK Daily').replace(/\.xlsm$/i,'')+'-'+xlsmStamp()+'.xlsm';
+    return await put(alt);
+  }
 }
 async function buildUpdatedXlsm(){
-  if(!originalBuf||!model||typeof JSZip==='undefined') return null;
-  const zip=await JSZip.loadAsync(originalBuf);
+  const base=sourceBuf||originalBuf;
+  if(!base||!model||typeof JSZip==='undefined') return null;
+  const zip=await JSZip.loadAsync(base);
   const sheet=zip.file('xl/worksheets/sheet1.xml');
   if(!sheet) return null;
   let xml=await sheet.async('string');
@@ -1878,18 +1883,17 @@ async function downloadXlsm(){
   try{
     const packed=await buildUpdatedXlsm();
     if(!packed){ toast('This workbook sheet could not be written'); return; }
-    originalBuf=packed.buf;
     const blob=packed.blob;
     const name=packed.name;
     if(saveMode==='folder' && saveDirHandle){
       try{
-        await writeToFolder(blob, name);
+        const savedAs=await writeToFolder(blob, name);
         await persist(false);
-        toast('Saved to folder '+saveDirHandle.name);
+        toast('Saved '+savedAs+' in '+saveDirHandle.name);
         return;
       }catch(err){
         console.error(err);
-        toast('Folder not available — using normal download');
+        toast('Folder save failed — downloading instead');
       }
     }
     const file=new File([blob], name, {type:'application/vnd.ms-excel.sheet.macroEnabled.12'});
@@ -1926,6 +1930,7 @@ async function importFile(file){
     }
     fileName=file.name;
     originalBuf=await file.arrayBuffer();
+    sourceBuf=originalBuf;
     const wb=XLSX.read(new Uint8Array(originalBuf),{type:'array',cellDates:true, raw:false});
     if(!wb.SheetNames||!wb.SheetNames.length) throw new Error('No sheets in file');
     model=ensureModel(parseWorkbook(wb));
@@ -1945,6 +1950,7 @@ async function restoreSaved(){
     fileName=pack.fileName||'HK Daily.xlsm';
     savedAt=pack.savedAt||'';
     originalBuf=pack.buf;
+    sourceBuf=pack.buf;
     model=ensureModel(pack.model);
     undoStack=Array.isArray(pack.undoStack)?pack.undoStack:[];
     redoStack=Array.isArray(pack.redoStack)?pack.redoStack:[];
@@ -1989,7 +1995,7 @@ document.getElementById('btnClear').onclick=async()=>{
   if(!confirm('Clear saved file and start again? Edits on this phone will be removed. The original Excel on your phone is not deleted.')) return;
   try{ await idbSet('pack', null); }catch(e){}
   localStorage.removeItem('hk-daily-meta');
-  originalBuf=null; model=null; fileName=''; savedAt='';
+  originalBuf=null; sourceBuf=null; model=null; fileName=''; savedAt='';
   document.getElementById('gate').hidden=false;
   document.getElementById('page').hidden=true;
   document.getElementById('page').innerHTML='';
