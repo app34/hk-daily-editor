@@ -1386,7 +1386,7 @@ function openPicker(kind,path,cur,nlist){
     const names=(model.names&&model.names[key])||[];
     const title=({villa:'Villa attendant',laundry:'Laundry',public:'Public area',supervisor:'Supervisor',minibar:'Minibar',office:'Office'}[key]||'Name');
     p.innerHTML='<h3>'+title+'</h3>'+
-      (names.length?names.map(n=>`<div class="opt ${n===cur?'on':''}" data-val="${esc(n)}"><b>${esc(n)}</b></div>`).join(''):'<div class="hint" style="padding:8px">No saved names yet. Add them in Menu → People names, or type in the box.</div>')+
+      (names.length?names.map(n=>`<div class="opt ${n===cur?'on':''}" data-val="${esc(n)}"><b>${esc(n)}</b></div>`).join(''):'<div class="hint" style="padding:8px">No saved names yet. Add them in Menu → Team Members, or type in the box.</div>')+
       `<div class="opt" data-val=""><b>Clear</b></div>
        <div class="hint" style="padding:8px 4px 0">Or type a name in the field — it stays editable.</div>`;
     return;
@@ -1453,7 +1453,7 @@ document.body.addEventListener('click',e=>{
   if(prm){ pickBags.moves.splice(+prm.dataset.prm,1); renderPickModal(); return; }
   const proom=e.target.closest('[data-proom]');
   if(proom){ togglePickRoom(proom.dataset.proom); return; }
-  if(e.target.id==='pkCancel'){ closePickModal(); return; }
+  if(e.target.id==='pkCancel' || e.target.id==='pkClose'){ closePickModal(); return; }
   if(e.target.id==='pkApply'){ applyPickImport(); return; }
   if(e.target.id==='pkClear'){ pickBags=emptyPickBags(); pickFrom=''; renderPickModal(); return; }
   const secEl=e.target.closest('[data-sec]');

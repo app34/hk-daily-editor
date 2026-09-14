@@ -226,7 +226,8 @@ input,select,textarea,.dd{-webkit-user-select:text}
 #pickModal.modal{
   left:0;right:0;top:0;bottom:0;max-width:none;width:100%;margin:0;border-radius:0;z-index:86;background:#f7f1ea;
 }
-#pickModal h3{border-radius:0;padding:7px 12px;padding-top:max(7px, env(safe-area-inset-top));font-size:14px}
+#pickModal h3{border-radius:0;padding:7px 12px;padding-top:max(7px, env(safe-area-inset-top));font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.mclose{margin-left:auto;border:0;background:transparent;color:#fff;font-size:26px;line-height:1;width:36px;height:36px;padding:0}
 #pickModal .body{padding:6px 8px 4px}
 #pickModal .actions{padding:6px 8px calc(8px + env(safe-area-inset-bottom));gap:6px}
 #pickModal .actions button{padding:8px;font-size:13px}

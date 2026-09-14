@@ -18,16 +18,16 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
 <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png"/>
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg"/>
-<meta name="app-version" content="1.6.1"/>
-<link rel="stylesheet" href="styles.css?v=1.6.1"/>
+<meta name="app-version" content="1.6.2"/>
+<link rel="stylesheet" href="styles.css?v=1.6.2"/>
 <script>
-  window.APP_BUILD = "1.6.1";
+  window.APP_BUILD = "1.6.2";
   (function () {
-    if (sessionStorage.getItem("hk-daily-forced") === "1.6.1") return;
+    if (sessionStorage.getItem("hk-daily-forced") === "1.6.2") return;
     fetch("version.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (info) {
       var need = String(info.minVersion || info.version || "");
       if (need && need !== window.APP_BUILD) {
-        sessionStorage.setItem("hk-daily-forced", "1.6.1");
+        sessionStorage.setItem("hk-daily-forced", "1.6.2");
         var done = Promise.resolve();
         if (navigator.serviceWorker) {
           done = navigator.serviceWorker.getRegistrations().then(function (regs) {
@@ -72,7 +72,7 @@
   </div>
 </div>
 <div class="menu" id="appMenu" hidden>
-  <button data-menu="people">People names</button>
+  <button data-menu="people">Team Members</button>
   <button data-menu="text">From text</button>
   <button data-menu="pick">Select rooms</button>
   <button data-menu="roll">To today</button>
@@ -117,7 +117,7 @@
   </div>
 </div>
 <div class="modal wide" id="pickModal">
-  <h3>Select rooms</h3>
+  <h3>Select rooms <button type="button" class="mclose" id="pkClose" aria-label="Close">×</button></h3>
   <div class="body" id="pickBody"></div>
   <div class="actions">
     <button id="pkClear" style="background:#eee">Clear all</button>
@@ -126,7 +126,7 @@
   </div>
 </div>
 <div class="modal" id="peopleModal">
-  <h3>People names</h3>
+  <h3>Team Members</h3>
   <div class="body" id="peopleBody"></div>
   <div class="actions">
     <button id="peopleClose" style="background:#eee">Close</button>
@@ -135,10 +135,10 @@
 <div class="toast" id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="app.js?v=1.6.1"></script>
+<script src="app.js?v=1.6.2"></script>
 <script>
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js?v=1.6.1", { updateViaCache: "none" }).catch(function () {});
+    navigator.serviceWorker.register("./sw.js?v=1.6.2", { updateViaCache: "none" }).catch(function () {});
   }
 </script>
 </body>
